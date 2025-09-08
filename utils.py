@@ -1,6 +1,6 @@
 """
 Instagram Competitor Analysis Utilities
-Focused on competitor intelligence and strategic recommendations
+Focused on 6-parameter analysis and product-specific recommendations
 """
 
 import os
@@ -16,6 +16,7 @@ from sklearn.cluster import KMeans
 from datetime import datetime
 import nltk
 from groq import Groq
+from collections import Counter
 
 # Optional Apify client import
 try:
@@ -37,7 +38,7 @@ except:
 from nltk.sentiment.vader import SentimentIntensityAnalyzer
 
 class InstagramCaptionScraper:
-    """Scraper focused on extracting Instagram captions via Apify"""
+    """Scraper for Instagram captions via Apify"""
     
     def __init__(self, apify_token: str = None):
         self.apify_token = apify_token
@@ -162,8 +163,8 @@ class InstagramCaptionScraper:
                 continue
         return None
 
-class CombinedAnalyzer:
-    """Analyzer for competitor intelligence and strategic insights"""
+class SixParameterAnalyzer:
+    """Analyzer based on the 6 core parameters for competitor analysis"""
     
     def __init__(self, groq_api_key: str):
         self.groq_api_key = groq_api_key
@@ -173,101 +174,309 @@ class CombinedAnalyzer:
         except:
             self.sentiment_analyzer = None
     
-    def analyze_competitor_post(self, caption: str, image: Image.Image, competitor_name: str, post_url: str) -> Dict[str, Any]:
-        """Analyze single competitor post (caption + image)"""
+    def analyze_post(self, caption: str, image: Image.Image, competitor_name: str, post_url: str) -> Dict[str, Any]:
+        """Analyze single post based on 6 parameters"""
         
-        # Analyze caption
-        caption_analysis = self._analyze_caption(caption)
+        # Parameter 1: Color Palette & Visual Style
+        color_visual_analysis = self._analyze_color_palette_visual_style(image)
         
-        # Analyze image
-        image_analysis = self._analyze_image(image)
+        # Parameter 2: Tone of Voice in Captions
+        tone_analysis = self._analyze_tone_of_voice(caption)
         
-        # Combined insights
-        combined_insights = self._generate_combined_insights(caption_analysis, image_analysis)
+        # Parameter 3: CTA Presence & Strength
+        cta_analysis = self._analyze_cta_presence_strength(caption)
+        
+        # Parameter 4: Hashtag & Keyword Strategy
+        hashtag_keyword_analysis = self._analyze_hashtag_keyword_strategy(caption)
+        
+        # Parameter 5: Readability & Clarity
+        readability_analysis = self._analyze_readability_clarity(caption)
+        
+        # Parameter 6: Emotional Appeal & Imagery Use
+        emotional_analysis = self._analyze_emotional_appeal_imagery(caption, image)
         
         return {
             "competitor_name": competitor_name,
             "post_url": post_url,
-            "caption_analysis": caption_analysis,
-            "image_analysis": image_analysis,
-            "combined_insights": combined_insights,
-            "strategic_score": self._calculate_strategic_score(caption_analysis, image_analysis)
+            "parameter_1_color_visual": color_visual_analysis,
+            "parameter_2_tone_voice": tone_analysis,
+            "parameter_3_cta": cta_analysis,
+            "parameter_4_hashtag_keywords": hashtag_keyword_analysis,
+            "parameter_5_readability": readability_analysis,
+            "parameter_6_emotional_appeal": emotional_analysis,
+            "overall_score": self._calculate_overall_score([
+                color_visual_analysis, tone_analysis, cta_analysis,
+                hashtag_keyword_analysis, readability_analysis, emotional_analysis
+            ])
         }
     
-    def _analyze_caption(self, caption: str) -> Dict[str, Any]:
-        """Analyze caption for competitive intelligence"""
-        if not caption:
-            return {
-                "themes": [],
-                "sentiment": "neutral",
-                "tone": "neutral",
-                "cta_strength": "none",
-                "hashtag_strategy": "basic"
-            }
-        
-        # Theme detection
-        themes = self._detect_themes(caption)
-        
-        # Sentiment analysis
-        sentiment = "neutral"
-        if self.sentiment_analyzer:
-            scores = self.sentiment_analyzer.polarity_scores(caption)
-            if scores['pos'] > 0.3:
-                sentiment = "positive"
-            elif scores['neg'] > 0.3:
-                sentiment = "negative"
-        
-        # CTA detection
-        cta_strength = self._detect_cta_strength(caption)
-        
-        # Hashtag strategy
-        hashtags = re.findall(r'#\w+', caption)
-        hashtag_strategy = self._analyze_hashtag_strategy(hashtags)
-        
-        return {
-            "themes": themes,
-            "sentiment": sentiment,
-            "tone": self._detect_tone(caption),
-            "cta_strength": cta_strength,
-            "hashtag_strategy": hashtag_strategy,
-            "hashtag_count": len(hashtags),
-            "word_count": len(caption.split())
-        }
-    
-    def _analyze_image(self, image: Image.Image) -> Dict[str, Any]:
-        """Analyze image for visual strategy insights"""
+    def _analyze_color_palette_visual_style(self, image: Image.Image) -> Dict[str, Any]:
+        """Parameter 1: Color Palette & Visual Style Analysis"""
         try:
-            # Color analysis
+            # Extract dominant colors
             colors = self._extract_colors(image)
             
-            # Visual properties
+            # Analyze brightness and saturation
             img_array = np.array(image)
             brightness = np.mean(img_array)
             
             # Color temperature
             mean_rgb = np.mean(img_array, axis=(0, 1))
             r, g, b = mean_rgb
-            color_temp = "warm" if r > b else "cool"
+            
+            # Determine tone
+            tone = "bright" if brightness > 180 else "muted" if brightness < 100 else "balanced"
+            
+            # Determine luxury vs playful
+            saturation = np.std(img_array)
+            luxury_playful = "luxury" if saturation < 50 and brightness > 150 else "playful"
+            
+            # Style classification (simplified)
+            style = "photo"  # Would need more sophisticated analysis for illustration/meme
             
             return {
                 "dominant_colors": colors,
-                "brightness_level": int(brightness),
-                "color_temperature": color_temp,
-                "visual_style": self._classify_visual_style(brightness),
-                "color_strategy": self._analyze_color_strategy(colors)
+                "tone": tone,
+                "luxury_playful": luxury_playful,
+                "style": style,
+                "brightness_score": int(brightness),
+                "score": self._score_color_visual(colors, tone, luxury_playful)
             }
             
         except Exception as e:
             return {
                 "dominant_colors": ["#000000"],
-                "brightness_level": 128,
-                "color_temperature": "neutral",
-                "visual_style": "unknown",
-                "color_strategy": "undefined"
+                "tone": "unknown",
+                "luxury_playful": "unknown",
+                "style": "unknown",
+                "brightness_score": 0,
+                "score": 0
             }
     
+    def _analyze_tone_of_voice(self, caption: str) -> Dict[str, Any]:
+        """Parameter 2: Tone of Voice Analysis"""
+        if not caption:
+            return {
+                "primary_tone": "neutral",
+                "secondary_tones": [],
+                "intensity": 0,
+                "score": 0
+            }
+        
+        caption_lower = caption.lower()
+        
+        # Detect different tones
+        tone_indicators = {
+            "humor": ["lol", "haha", "funny", "joke", "hilarious", "😂", "🤣"],
+            "inspiration": ["inspire", "motivate", "dream", "achieve", "believe", "✨", "💪"],
+            "authority": ["expert", "professional", "proven", "research", "studies"],
+            "casualness": ["hey", "guys", "tbh", "omg", "totally", "super"],
+            "urgency": ["now", "hurry", "limited", "deadline", "quick", "⏰", "🔥"]
+        }
+        
+        detected_tones = []
+        for tone, indicators in tone_indicators.items():
+            if any(indicator in caption_lower for indicator in indicators):
+                detected_tones.append(tone)
+        
+        # Determine primary tone
+        primary_tone = detected_tones[0] if detected_tones else "neutral"
+        
+        # Calculate intensity
+        total_indicators = sum(1 for indicators in tone_indicators.values() 
+                              for indicator in indicators if indicator in caption_lower)
+        intensity = min(10, total_indicators)
+        
+        return {
+            "primary_tone": primary_tone,
+            "secondary_tones": detected_tones[1:3],
+            "intensity": intensity,
+            "score": self._score_tone(primary_tone, intensity)
+        }
+    
+    def _analyze_cta_presence_strength(self, caption: str) -> Dict[str, Any]:
+        """Parameter 3: CTA Presence & Strength Analysis"""
+        if not caption:
+            return {
+                "cta_present": False,
+                "cta_strength": "none",
+                "cta_text": None,
+                "score": 0
+            }
+        
+        caption_lower = caption.lower()
+        
+        # Strong CTAs
+        strong_ctas = [
+            "shop now", "buy now", "order now", "click link", "swipe up",
+            "don't miss out", "limited time", "get yours", "subscribe now"
+        ]
+        
+        # Medium CTAs
+        medium_ctas = [
+            "check out", "see more", "learn more", "discover", "explore",
+            "find out", "read more", "watch", "follow"
+        ]
+        
+        # Weak/Implicit CTAs
+        weak_ctas = [
+            "link in bio", "thoughts?", "what do you think", "let me know",
+            "comment below", "tag someone"
+        ]
+        
+        cta_found = None
+        strength = "none"
+        
+        for cta in strong_ctas:
+            if cta in caption_lower:
+                cta_found = cta
+                strength = "strong"
+                break
+        
+        if not cta_found:
+            for cta in medium_ctas:
+                if cta in caption_lower:
+                    cta_found = cta
+                    strength = "medium"
+                    break
+        
+        if not cta_found:
+            for cta in weak_ctas:
+                if cta in caption_lower:
+                    cta_found = cta
+                    strength = "weak"
+                    break
+        
+        return {
+            "cta_present": cta_found is not None,
+            "cta_strength": strength,
+            "cta_text": cta_found,
+            "score": self._score_cta(strength)
+        }
+    
+    def _analyze_hashtag_keyword_strategy(self, caption: str) -> Dict[str, Any]:
+        """Parameter 4: Hashtag & Keyword Strategy Analysis"""
+        if not caption:
+            return {
+                "hashtag_count": 0,
+                "hashtag_strategy": "none",
+                "core_keywords": [],
+                "content_themes": [],
+                "score": 0
+            }
+        
+        # Extract hashtags
+        hashtags = re.findall(r'#\w+', caption)
+        hashtag_count = len(hashtags)
+        
+        # Determine hashtag strategy
+        if hashtag_count >= 15:
+            hashtag_strategy = "aggressive"
+        elif hashtag_count >= 8:
+            hashtag_strategy = "moderate"
+        elif hashtag_count >= 3:
+            hashtag_strategy = "selective"
+        elif hashtag_count >= 1:
+            hashtag_strategy = "minimal"
+        else:
+            hashtag_strategy = "none"
+        
+        # Extract keywords (excluding hashtags and common words)
+        words = re.findall(r'\b\w+\b', caption.lower())
+        stop_words = {'the', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for', 'of', 'with', 'by', 'a', 'an'}
+        keywords = [word for word in words if len(word) > 3 and word not in stop_words]
+        
+        # Get most common keywords
+        keyword_counts = Counter(keywords)
+        core_keywords = [word for word, count in keyword_counts.most_common(5)]
+        
+        # Detect content themes
+        themes = self._detect_content_themes(caption, hashtags)
+        
+        return {
+            "hashtag_count": hashtag_count,
+            "hashtag_strategy": hashtag_strategy,
+            "core_keywords": core_keywords,
+            "content_themes": themes,
+            "hashtags": hashtags[:10],  # Limit for display
+            "score": self._score_hashtag_keywords(hashtag_count, len(core_keywords), len(themes))
+        }
+    
+    def _analyze_readability_clarity(self, caption: str) -> Dict[str, Any]:
+        """Parameter 5: Readability & Clarity Analysis"""
+        if not caption:
+            return {
+                "word_count": 0,
+                "sentence_count": 0,
+                "avg_sentence_length": 0,
+                "readability_type": "none",
+                "clarity_score": 0,
+                "score": 0
+            }
+        
+        words = caption.split()
+        word_count = len(words)
+        
+        sentences = [s.strip() for s in caption.split('.') if s.strip()]
+        sentence_count = len(sentences)
+        
+        avg_sentence_length = word_count / max(sentence_count, 1)
+        
+        # Determine readability type
+        if word_count <= 50:
+            readability_type = "short_skimmable"
+        elif word_count <= 150:
+            readability_type = "medium_balanced"
+        else:
+            readability_type = "long_storytelling"
+        
+        # Calculate clarity score
+        clarity_factors = 0
+        if avg_sentence_length <= 15:  # Short sentences are clearer
+            clarity_factors += 20
+        if word_count <= 100:  # Concise is clearer
+            clarity_factors += 20
+        if sentence_count >= 2:  # Some structure
+            clarity_factors += 10
+        
+        # Check for clear product benefits
+        benefit_words = ["benefit", "feature", "advantage", "helps", "improves", "saves"]
+        if any(word in caption.lower() for word in benefit_words):
+            clarity_factors += 30
+        
+        clarity_score = min(100, clarity_factors)
+        
+        return {
+            "word_count": word_count,
+            "sentence_count": sentence_count,
+            "avg_sentence_length": round(avg_sentence_length, 1),
+            "readability_type": readability_type,
+            "clarity_score": clarity_score,
+            "score": self._score_readability(word_count, clarity_score)
+        }
+    
+    def _analyze_emotional_appeal_imagery(self, caption: str, image: Image.Image) -> Dict[str, Any]:
+        """Parameter 6: Emotional Appeal & Imagery Analysis"""
+        
+        # Text sentiment analysis
+        text_emotions = self._analyze_text_emotions(caption)
+        
+        # Image emotion analysis
+        image_emotions = self._analyze_image_emotions(image)
+        
+        # Calculate alignment
+        alignment_score = self._calculate_emotion_alignment(text_emotions, image_emotions)
+        
+        return {
+            "text_emotions": text_emotions,
+            "image_emotions": image_emotions,
+            "alignment_score": alignment_score,
+            "overall_emotional_impact": self._calculate_emotional_impact(text_emotions, image_emotions),
+            "score": self._score_emotional_appeal(text_emotions, image_emotions, alignment_score)
+        }
+    
     def _extract_colors(self, image: Image.Image, n_colors: int = 5) -> List[str]:
-        """Extract dominant colors"""
+        """Extract dominant colors using K-means clustering"""
         try:
             image = image.resize((150, 150))
             data = np.array(image).reshape((-1, 3))
@@ -286,164 +495,203 @@ class CombinedAnalyzer:
         except:
             return ['#000000']
     
-    def _detect_themes(self, caption: str) -> List[str]:
-        """Detect content themes"""
+    def _detect_content_themes(self, caption: str, hashtags: List[str]) -> List[str]:
+        """Detect content themes from caption and hashtags"""
+        all_text = (caption + ' ' + ' '.join(hashtags)).lower()
+        
         theme_keywords = {
-            "lifestyle": ["life", "daily", "routine", "home"],
-            "fashion": ["outfit", "style", "fashion", "wear"],
-            "food": ["food", "recipe", "eat", "delicious"],
-            "travel": ["travel", "trip", "vacation", "explore"],
-            "fitness": ["workout", "fitness", "gym", "health"],
-            "business": ["business", "work", "professional", "success"],
-            "beauty": ["beauty", "makeup", "skincare", "glow"],
-            "technology": ["tech", "digital", "app", "innovation"]
+            "lifestyle": ["life", "daily", "routine", "home", "family", "weekend"],
+            "fashion": ["outfit", "style", "fashion", "wear", "look", "trend"],
+            "food": ["food", "recipe", "eat", "delicious", "taste", "cook", "meal"],
+            "travel": ["travel", "trip", "vacation", "explore", "adventure", "destination"],
+            "fitness": ["workout", "fitness", "gym", "health", "exercise", "training"],
+            "beauty": ["beauty", "makeup", "skincare", "glow", "skin", "cosmetic"],
+            "technology": ["tech", "digital", "app", "innovation", "gadget"],
+            "business": ["business", "entrepreneur", "startup", "professional", "work"]
         }
         
         detected_themes = []
-        caption_lower = caption.lower()
-        
         for theme, keywords in theme_keywords.items():
-            if any(keyword in caption_lower for keyword in keywords):
+            if any(keyword in all_text for keyword in keywords):
                 detected_themes.append(theme)
         
         return detected_themes[:3]  # Top 3 themes
     
-    def _detect_tone(self, caption: str) -> str:
-        """Detect communication tone"""
-        caption_lower = caption.lower()
+    def _analyze_text_emotions(self, caption: str) -> Dict[str, Any]:
+        """Analyze emotions in text"""
+        if not caption:
+            return {"sentiment": "neutral", "emotions": [], "intensity": 0}
         
-        if any(word in caption_lower for word in ["amazing", "incredible", "love", "excited"]):
-            return "enthusiastic"
-        elif any(word in caption_lower for word in ["professional", "expert", "industry"]):
-            return "professional"
-        elif any(word in caption_lower for word in ["hey", "guys", "lol", "fun"]):
-            return "casual"
-        else:
-            return "neutral"
+        # Sentiment analysis
+        sentiment = "neutral"
+        if self.sentiment_analyzer:
+            scores = self.sentiment_analyzer.polarity_scores(caption)
+            if scores['pos'] > 0.3:
+                sentiment = "positive"
+            elif scores['neg'] > 0.3:
+                sentiment = "negative"
+        
+        # Emotion detection
+        emotion_keywords = {
+            "excitement": ["amazing", "incredible", "wow", "fantastic", "awesome"],
+            "trust": ["trusted", "reliable", "proven", "guarantee", "secure"],
+            "exclusivity": ["exclusive", "limited", "special", "vip", "premium"],
+            "happiness": ["happy", "joy", "smile", "fun", "celebrate"],
+            "urgency": ["hurry", "now", "quick", "limited", "deadline"]
+        }
+        
+        detected_emotions = []
+        caption_lower = caption.lower()
+        for emotion, keywords in emotion_keywords.items():
+            if any(keyword in caption_lower for keyword in keywords):
+                detected_emotions.append(emotion)
+        
+        # Calculate intensity
+        intensity = len(detected_emotions) * 2 + (len(re.findall(r'[!]{1,3}', caption)) * 1)
+        intensity = min(10, intensity)
+        
+        return {
+            "sentiment": sentiment,
+            "emotions": detected_emotions,
+            "intensity": intensity
+        }
     
-    def _detect_cta_strength(self, caption: str) -> str:
-        """Detect call-to-action strength"""
-        strong_ctas = ["click", "buy", "shop", "order", "subscribe", "follow", "sign up"]
-        medium_ctas = ["check out", "see more", "learn", "discover"]
+    def _analyze_image_emotions(self, image: Image.Image) -> Dict[str, Any]:
+        """Analyze emotions conveyed by image"""
+        try:
+            img_array = np.array(image)
+            
+            # Brightness indicates mood
+            brightness = np.mean(img_array)
+            
+            # Color analysis for emotions
+            colors = self._extract_colors(image, 3)
+            
+            # Simple emotion mapping based on brightness and colors
+            if brightness > 180:
+                mood = "bright_positive"
+            elif brightness < 80:
+                mood = "dark_dramatic"
+            else:
+                mood = "balanced"
+            
+            # Color psychology (simplified)
+            warm_colors = 0
+            cool_colors = 0
+            for color in colors:
+                try:
+                    hex_color = color.lstrip('#')
+                    r, g, b = tuple(int(hex_color[i:i+2], 16) for i in (0, 2, 4))
+                    if r > b:
+                        warm_colors += 1
+                    else:
+                        cool_colors += 1
+                except:
+                    continue
+            
+            color_emotion = "warm_inviting" if warm_colors > cool_colors else "cool_calming"
+            
+            return {
+                "mood": mood,
+                "color_emotion": color_emotion,
+                "brightness_level": int(brightness),
+                "emotional_indicators": [mood, color_emotion]
+            }
+            
+        except:
+            return {
+                "mood": "unknown",
+                "color_emotion": "unknown",
+                "brightness_level": 128,
+                "emotional_indicators": []
+            }
+    
+    def _calculate_emotion_alignment(self, text_emotions: Dict, image_emotions: Dict) -> int:
+        """Calculate alignment between text and image emotions"""
+        text_sentiment = text_emotions.get("sentiment", "neutral")
+        image_mood = image_emotions.get("mood", "unknown")
         
-        caption_lower = caption.lower()
+        alignment_score = 50  # Base score
         
-        if any(cta in caption_lower for cta in strong_ctas):
-            return "strong"
-        elif any(cta in caption_lower for cta in medium_ctas):
+        # Positive alignment
+        if text_sentiment == "positive" and "positive" in image_mood:
+            alignment_score += 30
+        elif text_sentiment == "negative" and "dark" in image_mood:
+            alignment_score += 20
+        
+        # Intensity alignment
+        text_intensity = text_emotions.get("intensity", 0)
+        image_brightness = image_emotions.get("brightness_level", 128)
+        
+        if text_intensity > 5 and image_brightness > 150:
+            alignment_score += 20
+        
+        return min(100, alignment_score)
+    
+    def _calculate_emotional_impact(self, text_emotions: Dict, image_emotions: Dict) -> str:
+        """Calculate overall emotional impact"""
+        text_intensity = text_emotions.get("intensity", 0)
+        image_indicators = len(image_emotions.get("emotional_indicators", []))
+        
+        total_impact = text_intensity + (image_indicators * 2)
+        
+        if total_impact >= 8:
+            return "high"
+        elif total_impact >= 4:
             return "medium"
         else:
-            return "weak"
+            return "low"
     
-    def _analyze_hashtag_strategy(self, hashtags: List[str]) -> str:
-        """Analyze hashtag strategy"""
-        count = len(hashtags)
-        
-        if count >= 10:
-            return "aggressive"
-        elif count >= 5:
-            return "moderate"
-        elif count >= 2:
-            return "minimal"
-        else:
-            return "none"
-    
-    def _classify_visual_style(self, brightness: float) -> str:
-        """Classify visual style"""
-        if brightness > 200:
-            return "bright_modern"
-        elif brightness < 80:
-            return "dark_dramatic"
-        else:
-            return "balanced"
-    
-    def _analyze_color_strategy(self, colors: List[str]) -> str:
-        """Analyze color strategy"""
-        if len(colors) <= 2:
-            return "minimalist"
-        elif len(colors) >= 4:
-            return "vibrant"
-        else:
-            return "balanced"
-    
-    def _generate_combined_insights(self, caption_analysis: Dict, image_analysis: Dict) -> List[str]:
-        """Generate strategic insights from combined analysis"""
-        insights = []
-        
-        # Theme-visual alignment
-        themes = caption_analysis.get("themes", [])
-        visual_style = image_analysis.get("visual_style", "")
-        
-        if "lifestyle" in themes and "bright" in visual_style:
-            insights.append("Strong lifestyle branding with optimistic visual approach")
-        
-        # CTA-visual coherence
-        cta_strength = caption_analysis.get("cta_strength", "weak")
-        color_strategy = image_analysis.get("color_strategy", "balanced")
-        
-        if cta_strength == "strong" and color_strategy == "vibrant":
-            insights.append("Aggressive conversion strategy with attention-grabbing visuals")
-        
-        # Engagement optimization
-        if caption_analysis.get("hashtag_count", 0) > 5 and "bright" in visual_style:
-            insights.append("High-engagement approach combining reach and visual appeal")
-        
-        return insights[:3]
-    
-    def _calculate_strategic_score(self, caption_analysis: Dict, image_analysis: Dict) -> int:
-        """Calculate strategic effectiveness score"""
-        score = 50  # Base score
-        
-        # Caption factors
-        if caption_analysis.get("cta_strength") == "strong":
+    # Scoring functions for each parameter
+    def _score_color_visual(self, colors: List[str], tone: str, luxury_playful: str) -> int:
+        score = 50
+        if len(colors) >= 3:
+            score += 20
+        if tone in ["bright", "luxury"]:
             score += 15
-        if len(caption_analysis.get("themes", [])) >= 2:
-            score += 10
-        if caption_analysis.get("hashtag_count", 0) >= 5:
-            score += 10
-        
-        # Visual factors
-        if image_analysis.get("color_strategy") == "vibrant":
-            score += 10
-        if image_analysis.get("brightness_level", 0) > 150:
-            score += 5
-        
         return min(100, score)
     
-    def generate_competitor_insights(self, competitor_data: Dict[str, List[Dict]]) -> Dict[str, Any]:
-        """Generate overall competitor intelligence"""
+    def _score_tone(self, primary_tone: str, intensity: int) -> int:
+        score = 40
+        if primary_tone != "neutral":
+            score += 30
+        score += min(30, intensity * 3)
+        return min(100, score)
+    
+    def _score_cta(self, strength: str) -> int:
+        scores = {"strong": 90, "medium": 70, "weak": 40, "none": 10}
+        return scores.get(strength, 10)
+    
+    def _score_hashtag_keywords(self, hashtag_count: int, keyword_count: int, theme_count: int) -> int:
+        score = 20
+        if hashtag_count >= 5:
+            score += 25
+        if keyword_count >= 3:
+            score += 25
+        if theme_count >= 2:
+            score += 30
+        return min(100, score)
+    
+    def _score_readability(self, word_count: int, clarity_score: int) -> int:
+        readability_score = clarity_score * 0.7
+        if 50 <= word_count <= 150:  # Optimal length
+            readability_score += 30
+        return min(100, int(readability_score))
+    
+    def _score_emotional_appeal(self, text_emotions: Dict, image_emotions: Dict, alignment_score: int) -> int:
+        text_intensity = text_emotions.get("intensity", 0)
+        emotion_count = len(text_emotions.get("emotions", []))
         
-        insights = {}
+        score = alignment_score * 0.4
+        score += text_intensity * 3
+        score += emotion_count * 5
         
-        for competitor, posts in competitor_data.items():
-            if not posts:
-                continue
-            
-            # Aggregate analysis
-            total_score = sum(post.get("strategic_score", 0) for post in posts)
-            avg_score = total_score / len(posts) if posts else 0
-            
-            # Common themes
-            all_themes = []
-            for post in posts:
-                all_themes.extend(post.get("caption_analysis", {}).get("themes", []))
-            
-            from collections import Counter
-            common_themes = [theme for theme, count in Counter(all_themes).most_common(3)]
-            
-            # Dominant strategies
-            cta_strategies = [post.get("caption_analysis", {}).get("cta_strength", "weak") for post in posts]
-            dominant_cta = Counter(cta_strategies).most_common(1)[0][0] if cta_strategies else "weak"
-            
-            insights[competitor] = {
-                "avg_strategic_score": round(avg_score, 1),
-                "post_count": len(posts),
-                "common_themes": common_themes,
-                "dominant_cta_strategy": dominant_cta,
-                "content_consistency": "high" if len(set(all_themes)) <= 3 else "low"
-            }
-        
-        return insights
+        return min(100, int(score))
+    
+    def _calculate_overall_score(self, parameter_analyses: List[Dict]) -> int:
+        """Calculate overall score from all 6 parameters"""
+        scores = [analysis.get("score", 0) for analysis in parameter_analyses]
+        return int(sum(scores) / len(scores)) if scores else 0
 
 def call_groq_model(prompt: str, system: str = None, max_tokens: int = 2048, groq_api_key: str = None) -> Dict[str, Any]:
     """Call Groq API for strategic analysis"""
@@ -473,44 +721,64 @@ def call_groq_model(prompt: str, system: str = None, max_tokens: int = 2048, gro
     except Exception as e:
         return {"error": str(e), "content": None}
 
-def generate_strategic_recommendations(competitor_insights: Dict, groq_api_key: str) -> Dict[str, Any]:
-    """Generate strategic recommendations based on competitor analysis"""
+def generate_three_suggestion_sets(competitor_analyses: List[Dict], groq_api_key: str) -> Dict[str, Any]:
+    """Generate 3 suggestion sets based on 6-parameter analysis"""
     
     if not groq_api_key:
         return {"error": "API key required"}
     
-    # Prepare competitor data for LLM
-    competitor_summary = json.dumps(competitor_insights, indent=2)
+    # Aggregate parameter insights
+    parameter_summary = _aggregate_parameter_insights(competitor_analyses)
     
-    strategy_prompt = f"""Based on this competitor analysis, generate strategic recommendations:
+    strategy_prompt = f"""Based on competitor analysis across 6 key parameters, generate 3 distinct strategic approaches:
 
-{competitor_summary}
+Parameter Analysis Summary:
+{json.dumps(parameter_summary, indent=2)}
 
-Provide 3 strategic approaches in JSON format:
+Generate 3 suggestion sets focusing on different parameter combinations:
+
 {{
-    "differentiation_strategy": {{
-        "approach": "description",
-        "content_pillars": ["pillar1", "pillar2", "pillar3"],
-        "visual_direction": "description",
-        "tone_strategy": "description"
+    "suggestion_set_1": {{
+        "name": "Strategy Name",
+        "focus_parameters": ["parameter_1", "parameter_2"],
+        "approach_description": "Clear description of this strategic approach",
+        "color_visual_strategy": "specific visual direction",
+        "tone_voice_strategy": "specific tone recommendation",
+        "cta_strategy": "specific CTA approach",
+        "hashtag_strategy": "specific hashtag approach",
+        "readability_strategy": "specific readability approach", 
+        "emotional_strategy": "specific emotional approach",
+        "expected_impact": "high|medium|low"
     }},
-    "competitive_advantage": {{
-        "approach": "description", 
-        "content_pillars": ["pillar1", "pillar2", "pillar3"],
-        "visual_direction": "description",
-        "tone_strategy": "description"
+    "suggestion_set_2": {{
+        "name": "Strategy Name",
+        "focus_parameters": ["parameter_3", "parameter_4"],
+        "approach_description": "Clear description of this strategic approach",
+        "color_visual_strategy": "specific visual direction",
+        "tone_voice_strategy": "specific tone recommendation", 
+        "cta_strategy": "specific CTA approach",
+        "hashtag_strategy": "specific hashtag approach",
+        "readability_strategy": "specific readability approach",
+        "emotional_strategy": "specific emotional approach", 
+        "expected_impact": "high|medium|low"
     }},
-    "market_gap_strategy": {{
-        "approach": "description",
-        "content_pillars": ["pillar1", "pillar2", "pillar3"], 
-        "visual_direction": "description",
-        "tone_strategy": "description"
+    "suggestion_set_3": {{
+        "name": "Strategy Name", 
+        "focus_parameters": ["parameter_5", "parameter_6"],
+        "approach_description": "Clear description of this strategic approach",
+        "color_visual_strategy": "specific visual direction",
+        "tone_voice_strategy": "specific tone recommendation",
+        "cta_strategy": "specific CTA approach", 
+        "hashtag_strategy": "specific hashtag approach",
+        "readability_strategy": "specific readability approach",
+        "emotional_strategy": "specific emotional approach",
+        "expected_impact": "high|medium|low"
     }}
 }}"""
     
     response = call_groq_model(
         prompt=strategy_prompt,
-        system="You are a strategic social media consultant specializing in competitive differentiation.",
+        system="You are a strategic social media consultant specializing in parameter-based competitive differentiation for Instagram marketing.",
         groq_api_key=groq_api_key
     )
     
@@ -520,40 +788,83 @@ Provide 3 strategic approaches in JSON format:
     except:
         pass
     
-    return {"error": "Could not generate recommendations"}
+    return {"error": "Could not generate suggestion sets"}
 
-def generate_campaign_prompts(strategy: Dict, groq_api_key: str) -> Dict[str, Any]:
-    """Generate image/video creation prompts based on strategy"""
+def _aggregate_parameter_insights(competitor_analyses: List[Dict]) -> Dict[str, Any]:
+    """Aggregate insights from competitor analyses across all 6 parameters"""
     
-    campaign_prompt = f"""Generate 5 campaign sets for this strategy:
+    parameter_aggregation = {
+        "color_visual_trends": {},
+        "tone_voice_trends": {},
+        "cta_trends": {},
+        "hashtag_trends": {},
+        "readability_trends": {},
+        "emotional_trends": {}
+    }
+    
+    for analysis in competitor_analyses:
+        # Aggregate each parameter
+        if "parameter_1_color_visual" in analysis:
+            param = analysis["parameter_1_color_visual"]
+            parameter_aggregation["color_visual_trends"]["tone"] = parameter_aggregation["color_visual_trends"].get("tone", {})
+            tone = param.get("tone", "unknown")
+            parameter_aggregation["color_visual_trends"]["tone"][tone] = parameter_aggregation["color_visual_trends"]["tone"].get(tone, 0) + 1
+        
+        # Similar aggregation for other parameters...
+    
+    return parameter_aggregation
 
-Strategy: {json.dumps(strategy, indent=2)}
+def generate_product_specific_prompts(suggestion_set: Dict, company_products: List[Dict], groq_api_key: str) -> Dict[str, Any]:
+    """Generate product-specific image and video prompts based on suggestion set"""
+    
+    product_prompts = {}
+    
+    for product in company_products:
+        product_name = product.get("name", "Unknown Product")
+        product_description = product.get("description", "")
+        product_category = product.get("category", "")
+        
+        prompt_generation_request = f"""Generate specific image and video creation prompts for this product based on the strategic approach:
 
-Return JSON with 5 campaign sets:
+Product: {product_name}
+Description: {product_description}
+Category: {product_category}
+
+Strategic Approach:
+- Visual Strategy: {suggestion_set.get('color_visual_strategy', '')}
+- Tone Strategy: {suggestion_set.get('tone_voice_strategy', '')}
+- CTA Strategy: {suggestion_set.get('cta_strategy', '')}
+- Emotional Strategy: {suggestion_set.get('emotional_strategy', '')}
+
+Generate prompts in this JSON format:
 {{
-    "campaign_sets": [
-        {{
-            "name": "Campaign Set 1",
-            "theme": "specific theme",
-            "image_prompt": "Detailed prompt for image generation (Midjourney/DALL-E style)",
-            "video_prompt": "Detailed prompt for video creation", 
-            "caption_template": "Template with placeholders for caption",
-            "hashtags": ["#hashtag1", "#hashtag2", "#hashtag3"],
-            "target_emotion": "emotion to evoke"
-        }}
-    ]
+    "image_prompts": [
+        "Detailed image generation prompt 1 for {product_name}",
+        "Detailed image generation prompt 2 for {product_name}",
+        "Detailed image generation prompt 3 for {product_name}"
+    ],
+    "video_prompts": [
+        "Detailed video creation prompt 1 for {product_name}",
+        "Detailed video creation prompt 2 for {product_name}",
+        "Detailed video creation prompt 3 for {product_name}"
+    ],
+    "caption_templates": [
+        "Caption template 1 with placeholders for {product_name}",
+        "Caption template 2 with placeholders for {product_name}"
+    ],
+    "hashtag_suggestions": ["#hashtag1", "#hashtag2", "#hashtag3", "#hashtag4", "#hashtag5"]
 }}"""
+        
+        response = call_groq_model(
+            prompt=prompt_generation_request,
+            system="You are a creative content strategist generating specific, actionable prompts for product marketing content creation.",
+            groq_api_key=groq_api_key
+        )
+        
+        try:
+            if response.get("content"):
+                product_prompts[product_name] = json.loads(response["content"])
+        except:
+            product_prompts[product_name] = {"error": "Could not generate prompts"}
     
-    response = call_groq_model(
-        prompt=campaign_prompt,
-        system="You are a creative campaign director generating specific, actionable prompts for content creation.",
-        groq_api_key=groq_api_key
-    )
-    
-    try:
-        if response.get("content"):
-            return json.loads(response["content"])
-    except:
-        pass
-    
-    return {"error": "Could not generate campaign prompts"}
+    return product_prompts
