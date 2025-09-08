@@ -1,6 +1,6 @@
 """
 Instagram Competitor Analysis Utilities
-Enhanced with multiple scraping approaches for better reliability
+Enhanced with Apify API integration for reliable scraping
 """
 
 import os
@@ -18,6 +18,7 @@ import time
 import nltk
 import jsonschema
 from groq import Groq
+from apify_client import ApifyClient
 
 # Download required NLTK data (run once)
 try:
@@ -29,11 +30,199 @@ except:
 
 from nltk.sentiment.vader import SentimentIntensityAnalyzer
 
-class InstagramAnalyzer:
-    """Main class for Instagram post analysis with multiple scraping methods"""
+class InstagramApifyScraper:
+    """Apify-based Instagram scraper for reliable data extraction"""
     
-    def __init__(self, groq_api_key: str):
+    def __init__(self, apify_token: str):
+        if not apify_token:
+            raise ValueError("Apify token is required")
+        
+        self.client = ApifyClient(apify_token)
+        # Actor IDs for different Apify Instagram scrapers
+        self.post_scraper_id = "apify/instagram-post-scraper"  # For individual posts
+        self.profile_scraper_id = "apify/instagram-scraper"    # For profiles and posts
+        
+    def scrape_single_post(self, post_url: str) -> Dict[str, Any]:
+        """
+        Scrape a single Instagram post using Apify Post Scraper
+        
+        Args:
+            post_url: Instagram post URL
+            
+        Returns:
+            Dictionary containing post data
+        """
+        try:
+            print(f"🔍 Scraping {post_url} with Apify...")
+            
+            # Prepare input for Apify Instagram Post Scraper
+            run_input = {
+                "postUrls": [post_url],
+                "resultsLimit": 1,
+                "proxy": {
+                    "useApifyProxy": True
+                }
+            }
+            
+            # Run the Apify actor
+            run = self.client.actor(self.post_scraper_id).call(run_input=run_input)
+            
+            # Get results from the dataset
+            dataset_id = run["defaultDatasetId"]
+            dataset = self.client.dataset(dataset_id)
+            
+            # Fetch the first (and only) result
+            for item in dataset.iterate_items():
+                return self._parse_apify_result(item, post_url)
+                
+            # If no results found
+            return {
+                "url": post_url,
+                "caption": None,
+                "image_url": None,
+                "timestamp": None,
+                "errors": "No data returned from Apify scraper"
+            }
+            
+        except Exception as e:
+            print(f"❌ Apify scraping error: {str(e)}")
+            return {
+                "url": post_url,
+                "caption": None,
+                "image_url": None,
+                "timestamp": None,
+                "errors": f"Apify scraping failed: {str(e)}"
+            }
+    
+    def scrape_posts_by_username(self, username: str, limit: int = 10) -> List[Dict[str, Any]]:
+        """
+        Scrape posts from a username using Apify Profile Scraper
+        
+        Args:
+            username: Instagram username (without @)
+            limit: Number of posts to scrape
+            
+        Returns:
+            List of post dictionaries
+        """
+        try:
+            print(f"🔍 Scraping posts from @{username} with Apify...")
+            
+            # Prepare input for Apify Instagram Scraper
+            run_input = {
+                "usernames": [username],
+                "resultsType": "posts",
+                "resultsLimit": limit,
+                "proxy": {
+                    "useApifyProxy": True
+                }
+            }
+            
+            # Run the Apify actor
+            run = self.client.actor(self.profile_scraper_id).call(run_input=run_input)
+            
+            # Get results from the dataset
+            dataset_id = run["defaultDatasetId"]
+            dataset = self.client.dataset(dataset_id)
+            
+            # Fetch all results
+            results = []
+            for item in dataset.iterate_items():
+                parsed_item = self._parse_apify_result(item)
+                if parsed_item:
+                    results.append(parsed_item)
+            
+            return results
+            
+        except Exception as e:
+            print(f"❌ Apify username scraping error: {str(e)}")
+            return []
+    
+    def _parse_apify_result(self, item: Dict, original_url: str = None) -> Dict[str, Any]:
+        """
+        Parse Apify result into standardized format
+        
+        Args:
+            item: Raw item from Apify dataset
+            original_url: Original URL if available
+            
+        Returns:
+            Standardized post data dictionary
+        """
+        try:
+            # Extract URL
+            url = original_url or item.get('url') or item.get('shortCode')
+            if url and not url.startswith('http'):
+                url = f"https://www.instagram.com/p/{url}/"
+            
+            # Extract caption
+            caption = item.get('caption') or item.get('text') or item.get('description')
+            
+            # Extract image URL - try multiple fields
+            image_url = (
+                item.get('displayUrl') or 
+                item.get('imageUrl') or 
+                item.get('thumbnailUrl') or
+                item.get('url') if item.get('type') == 'Image' else None
+            )
+            
+            # Handle image arrays (for carousel posts)
+            if not image_url and item.get('images'):
+                images = item.get('images', [])
+                if images and len(images) > 0:
+                    image_url = images[0].get('url') or images[0].get('displayUrl')
+            
+            # Extract timestamp
+            timestamp = None
+            timestamp_field = item.get('timestamp') or item.get('takenAt') or item.get('createdTime')
+            if timestamp_field:
+                try:
+                    if isinstance(timestamp_field, str):
+                        # Try parsing ISO format
+                        timestamp = timestamp_field
+                    elif isinstance(timestamp_field, (int, float)):
+                        # Unix timestamp
+                        timestamp = datetime.fromtimestamp(timestamp_field).isoformat()
+                except:
+                    timestamp = str(timestamp_field)
+            
+            return {
+                "url": url,
+                "caption": caption,
+                "image_url": image_url,
+                "timestamp": timestamp,
+                "errors": None,
+                "apify_data": item  # Store original data for debugging
+            }
+            
+        except Exception as e:
+            print(f"❌ Error parsing Apify result: {str(e)}")
+            return {
+                "url": original_url,
+                "caption": None,
+                "image_url": None,
+                "timestamp": None,
+                "errors": f"Parsing error: {str(e)}",
+                "apify_data": item
+            }
+
+class InstagramAnalyzer:
+    """Enhanced Instagram analyzer with Apify integration"""
+    
+    def __init__(self, groq_api_key: str, apify_token: str = None):
         self.groq_api_key = groq_api_key
+        self.apify_token = apify_token
+        
+        # Initialize Apify scraper if token provided
+        self.apify_scraper = None
+        if apify_token:
+            try:
+                self.apify_scraper = InstagramApifyScraper(apify_token)
+                print("✅ Apify scraper initialized")
+            except Exception as e:
+                print(f"❌ Failed to initialize Apify scraper: {e}")
+        
+        # Fallback to requests session
         self.session = requests.Session()
         self.session.headers.update({
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36'
@@ -47,7 +236,7 @@ class InstagramAnalyzer:
     
     def fetch_instagram_post(self, url: str) -> Dict[str, Any]:
         """
-        Fetch Instagram post data using multiple methods
+        Fetch Instagram post data using Apify (primary) or fallback methods
         
         Args:
             url: Instagram post URL
@@ -55,109 +244,28 @@ class InstagramAnalyzer:
         Returns:
             Dictionary containing post data and metadata
         """
-        # Try different scraping methods in order of reliability
-        methods = [
-            self._method_graphql_endpoint,
-            self._method_json_endpoint,
-            self._method_html_scraping,
-            self._method_oembed
-        ]
-        
-        for method_name, method in enumerate(methods, 1):
+        # Try Apify first if available
+        if self.apify_scraper:
+            print("🚀 Using Apify scraper...")
             try:
-                print(f"Trying method {method_name}: {method.__name__}")
-                result = method(url)
+                result = self.apify_scraper.scrape_single_post(url)
                 if result and not result.get("errors"):
-                    print(f"✅ Success with method {method_name}")
+                    print("✅ Apify scraping successful")
                     return result
                 else:
-                    print(f"❌ Method {method_name} failed: {result.get('errors', 'Unknown error')}")
+                    print(f"⚠️ Apify failed: {result.get('errors', 'Unknown error')}")
             except Exception as e:
-                print(f"❌ Method {method_name} exception: {str(e)}")
-                continue
+                print(f"❌ Apify exception: {str(e)}")
         
-        # If all methods fail, return error
-        return {
-            "url": url,
-            "caption": None,
-            "image_url": None,
-            "timestamp": None,
-            "errors": "All scraping methods failed - Instagram may be blocking requests"
-        }
+        # Fallback to traditional scraping methods
+        print("🔄 Falling back to traditional scraping...")
+        return self._fallback_scraping(url)
     
-    def _method_graphql_endpoint(self, url: str) -> Dict[str, Any]:
-        """Method 1: Try Instagram's GraphQL endpoint"""
+    def _fallback_scraping(self, url: str) -> Dict[str, Any]:
+        """Fallback scraping method using requests"""
         try:
-            # Extract shortcode from URL
-            match = re.search(r"/p/([a-zA-Z0-9_-]+)/", url)
-            if not match:
-                return {"errors": "Invalid Instagram post URL format"}
-            
-            shortcode = match.group(1)
-            
-            # Try GraphQL endpoint
-            graphql_url = "https://www.instagram.com/graphql/query/"
-            
-            # This requires specific query hash and variables - simplified version
             headers = {
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-                'X-Requested-With': 'XMLHttpRequest',
-                'Referer': url,
-                'Accept': 'application/json'
-            }
-            
-            # Try the shortcode media endpoint
-            api_url = f"https://www.instagram.com/p/{shortcode}/embed/captioned/"
-            response = self.session.get(api_url, headers=headers, timeout=15)
-            
-            if response.status_code == 200:
-                html_content = response.text
-                return self._parse_html_content(html_content, url)
-            else:
-                return {"errors": f"GraphQL method failed with status {response.status_code}"}
-                
-        except Exception as e:
-            return {"errors": f"GraphQL method error: {str(e)}"}
-    
-    def _method_json_endpoint(self, url: str) -> Dict[str, Any]:
-        """Method 2: Try JSON endpoint with __a=1 parameter"""
-        try:
-            match = re.search(r"/p/([a-zA-Z0-9_-]+)/", url)
-            if not match:
-                return {"errors": "Invalid Instagram post URL format"}
-            
-            shortcode = match.group(1)
-            
-            headers = {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-                'Accept': 'application/json, text/plain, */*',
-                'Accept-Language': 'en-US,en;q=0.9',
-                'Accept-Encoding': 'gzip, deflate, br',
-                'Referer': 'https://www.instagram.com/',
-                'X-Requested-With': 'XMLHttpRequest'
-            }
-            
-            api_url = f"https://www.instagram.com/p/{shortcode}/?__a=1&__d=dis"
-            response = self.session.get(api_url, headers=headers, timeout=15)
-            
-            if response.status_code == 200:
-                try:
-                    data = response.json()
-                    return self._parse_json_response(data, url)
-                except json.JSONDecodeError:
-                    # If JSON fails, try parsing as HTML
-                    return self._parse_html_content(response.text, url)
-            else:
-                return {"errors": f"JSON endpoint failed with status {response.status_code}"}
-                
-        except Exception as e:
-            return {"errors": f"JSON method error: {str(e)}"}
-    
-    def _method_html_scraping(self, url: str) -> Dict[str, Any]:
-        """Method 3: Traditional HTML scraping"""
-        try:
-            headers = {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36',
                 'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
                 'Accept-Language': 'en-US,en;q=0.5',
                 'Accept-Encoding': 'gzip, deflate, br',
@@ -171,84 +279,13 @@ class InstagramAnalyzer:
             return self._parse_html_content(response.text, url)
             
         except Exception as e:
-            return {"errors": f"HTML scraping error: {str(e)}"}
-    
-    def _method_oembed(self, url: str) -> Dict[str, Any]:
-        """Method 4: Try Instagram's oEmbed endpoint"""
-        try:
-            oembed_url = f"https://api.instagram.com/oembed/?url={url}"
-            
-            headers = {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-            }
-            
-            response = self.session.get(oembed_url, headers=headers, timeout=15)
-            
-            if response.status_code == 200:
-                data = response.json()
-                
-                # Extract what we can from oEmbed
-                return {
-                    "url": url,
-                    "caption": None,  # oEmbed doesn't provide caption
-                    "image_url": data.get('thumbnail_url'),
-                    "timestamp": None,
-                    "errors": None
-                }
-            else:
-                return {"errors": f"oEmbed failed with status {response.status_code}"}
-                
-        except Exception as e:
-            return {"errors": f"oEmbed method error: {str(e)}"}
-    
-    def _parse_json_response(self, data: Dict, url: str) -> Dict[str, Any]:
-        """Parse JSON response from Instagram API"""
-        try:
-            # Handle different JSON response structures
-            if 'graphql' in data:
-                media = data['graphql']['shortcode_media']
-            elif 'items' in data and data['items']:
-                media = data['items'][0]
-            else:
-                return {"errors": "Unrecognized JSON structure"}
-            
-            # Extract caption
-            caption = None
-            if 'edge_media_to_caption' in media:
-                edges = media['edge_media_to_caption']['edges']
-                if edges:
-                    caption = edges[0]['node']['text']
-            elif 'caption' in media and media['caption']:
-                caption = media['caption'].get('text', '')
-            
-            # Extract image URL
-            image_url = None
-            if 'display_url' in media:
-                image_url = media['display_url']
-            elif 'image_versions2' in media:
-                candidates = media['image_versions2']['candidates']
-                if candidates:
-                    image_url = candidates[0]['url']
-            elif 'thumbnail_src' in media:
-                image_url = media['thumbnail_src']
-            
-            # Extract timestamp
-            timestamp = None
-            if 'taken_at_timestamp' in media:
-                timestamp = datetime.fromtimestamp(media['taken_at_timestamp']).isoformat()
-            elif 'taken_at' in media:
-                timestamp = datetime.fromtimestamp(media['taken_at']).isoformat()
-            
             return {
                 "url": url,
-                "caption": caption,
-                "image_url": image_url,
-                "timestamp": timestamp,
-                "errors": None
+                "caption": None,
+                "image_url": None,
+                "timestamp": None,
+                "errors": f"Fallback scraping failed: {str(e)}"
             }
-            
-        except Exception as e:
-            return {"errors": f"JSON parsing error: {str(e)}"}
     
     def _parse_html_content(self, html_content: str, url: str) -> Dict[str, Any]:
         """Parse HTML content for Instagram post data"""
@@ -271,7 +308,13 @@ class InstagramAnalyzer:
             }
             
         except Exception as e:
-            return {"errors": f"HTML parsing error: {str(e)}"}
+            return {
+                "url": url,
+                "caption": None,
+                "image_url": None,
+                "timestamp": None,
+                "errors": f"HTML parsing error: {str(e)}"
+            }
     
     def _extract_caption_safe(self, html: str) -> Optional[str]:
         """Safely extract caption from HTML"""
@@ -284,7 +327,6 @@ class InstagramAnalyzer:
             r'"accessibility_caption":"([^"]*)"',
             r'"edge_media_to_caption":\s*{"edges":\s*\[{"node":\s*{"text":\s*"([^"]*)"',
             r'<meta name="description" content="([^"]*)"',
-            r'"text":"([^"]*)"[^}]*"shortcode"',
         ]
         
         for pattern in patterns:
@@ -292,15 +334,13 @@ class InstagramAnalyzer:
                 match = re.search(pattern, html)
                 if match:
                     caption = match.group(1)
-                    if caption and len(caption.strip()) > 5:  # Only return substantial captions
+                    if caption and len(caption.strip()) > 5:
                         try:
-                            # Safely decode unicode escapes
                             caption = caption.encode('utf-8').decode('unicode_escape')
-                        except (UnicodeDecodeError, AttributeError):
-                            # If decoding fails, return as-is
+                        except:
                             pass
-                        return caption[:1000]  # Limit length
-            except Exception:
+                        return caption[:1000]
+            except:
                 continue
         
         return None
@@ -315,9 +355,6 @@ class InstagramAnalyzer:
             r'<meta property="og:image" content="([^"]*)"',
             r'"thumbnail_src":"([^"]*)"',
             r'"src":"([^"]*\.jpg[^"]*)"',
-            r'"image_versions2":\s*{"candidates":\s*\[{"width":\s*1080[^}]*"url":\s*"([^"]*)"',
-            r'"display_resources":\s*\[[^}]*{"src":\s*"([^"]*)"[^}]*"config_width":\s*1080',
-            r'<meta name="twitter:image" content="([^"]*)"',
         ]
         
         for pattern in patterns:
@@ -328,15 +365,13 @@ class InstagramAnalyzer:
                     
                     if url:
                         try:
-                            # Safely decode unicode escapes
                             url = url.encode('utf-8').decode('unicode_escape')
-                        except (UnicodeDecodeError, AttributeError):
+                        except:
                             pass
                         
-                        # Validate URL
                         if url.startswith('http') and any(domain in url for domain in ['instagram', 'cdninstagram', 'fbcdn']):
                             return url
-            except Exception:
+            except:
                 continue
         
         return None
@@ -351,19 +386,18 @@ class InstagramAnalyzer:
             r'"date":"([^"]*)"',
             r'"taken_at":(\d+)',
             r'datetime="([^"]*)"',
-            r'"uploadDate":"([^"]*)"'
         ]
         
         for pattern in patterns:
             try:
                 match = re.search(pattern, html)
                 if match:
-                    if pattern.endswith('(\\d+)'):  # Unix timestamp
+                    if pattern.endswith('(\\d+)'):
                         timestamp = int(match.group(1))
                         return datetime.fromtimestamp(timestamp).isoformat()
                     else:
                         return match.group(1)
-            except Exception:
+            except:
                 continue
         
         return None
@@ -406,18 +440,13 @@ class InstagramAnalyzer:
     def extract_colors(self, image: Image.Image, n_colors: int = 5) -> List[str]:
         """Extract dominant colors using K-means clustering"""
         try:
-            # Resize image for faster processing
             image = image.resize((150, 150))
-            
-            # Convert to numpy array
             data = np.array(image)
             data = data.reshape((-1, 3))
             
-            # Apply K-means
             kmeans = KMeans(n_clusters=n_colors, random_state=42, n_init=10)
             kmeans.fit(data)
             
-            # Convert colors to hex
             colors = []
             for color in kmeans.cluster_centers_:
                 hex_color = '#{:02x}{:02x}{:02x}'.format(
@@ -430,7 +459,7 @@ class InstagramAnalyzer:
             
         except Exception as e:
             print(f"Error extracting colors: {e}")
-            return ['#000000']  # Fallback to black
+            return ['#000000']
     
     def analyze_caption_rules(self, caption: str) -> Dict[str, Any]:
         """Analyze caption using rule-based methods"""
@@ -447,13 +476,11 @@ class InstagramAnalyzer:
         # Extract hashtags
         hashtags = re.findall(r'#\w+', caption)
         
-        # Extract keywords (simple approach)
+        # Extract keywords
         words = re.findall(r'\b\w+\b', caption.lower())
-        # Remove common stop words
         stop_words = {'the', 'a', 'an', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for', 'of', 'with', 'by', 'is', 'are', 'was', 'were', 'be', 'been', 'being', 'have', 'has', 'had', 'do', 'does', 'did', 'will', 'would', 'could', 'should', 'may', 'might', 'must', 'can', 'this', 'that', 'these', 'those', 'i', 'you', 'he', 'she', 'it', 'we', 'they', 'me', 'him', 'her', 'us', 'them'}
         keywords = [word for word in words if word not in stop_words and len(word) > 3]
         
-        # Count word frequency
         from collections import Counter
         word_counts = Counter(keywords)
         top_keywords = [word for word, count in word_counts.most_common(5)]
@@ -473,10 +500,10 @@ class InstagramAnalyzer:
                 cta_text = match.group(0)
                 break
         
-        # Simple readability score (based on sentence and word length)
+        # Simple readability score
         sentences = [s.strip() for s in caption.split('.') if s.strip()]
         avg_sentence_length = sum(len(s.split()) for s in sentences) / max(len(sentences), 1)
-        readability_score = max(0, 100 - (avg_sentence_length * 2))  # Simple formula
+        readability_score = max(0, 100 - (avg_sentence_length * 2))
         
         return {
             "hashtags": hashtags,
@@ -506,10 +533,8 @@ class InstagramAnalyzer:
         sentence_count = len(sentences)
         avg_sentence_length = word_count / max(sentence_count, 1)
         
-        # Determine if skimmable (short sentences, good structure)
         skimmable = avg_sentence_length <= 15 and word_count <= 100
         
-        # Score based on readability factors
         score = 100
         if avg_sentence_length > 20:
             score -= 30
@@ -519,7 +544,6 @@ class InstagramAnalyzer:
             score -= 10
         
         score = max(0, score)
-        
         evidence = f"Average sentence length: {avg_sentence_length:.1f} words"
         
         return {
@@ -534,14 +558,10 @@ class InstagramAnalyzer:
     def analyze_visual_emotions(self, image: Image.Image) -> Dict[str, Any]:
         """Analyze visual emotions using simple heuristics"""
         try:
-            # Convert to numpy for basic analysis
             img_array = np.array(image)
-            
-            # Calculate basic color statistics
             mean_rgb = np.mean(img_array, axis=(0, 1))
             brightness = np.mean(mean_rgb)
             
-            # Simple emotion classification based on color analysis
             emotions = []
             
             if brightness > 180:
@@ -551,7 +571,6 @@ class InstagramAnalyzer:
             else:
                 emotions.append("balanced")
             
-            # Color-based emotions
             r, g, b = mean_rgb
             if r > g and r > b:
                 emotions.append("warm")
@@ -560,14 +579,13 @@ class InstagramAnalyzer:
             elif g > r and g > b:
                 emotions.append("natural")
             
-            # Ensure emotions is never empty
             if not emotions:
                 emotions = ["neutral"]
             
             result = {
-                "visual_emotions": emotions[:3],  # Limit to 3, guaranteed to have at least one
+                "visual_emotions": emotions[:3],
                 "brightness": int(brightness),
-                "score": min(100, int(brightness * 0.5 + 25))  # Simple scoring
+                "score": min(100, int(brightness * 0.5 + 25))
             }
             
             print(f"Visual emotions analyzed: {result}")
@@ -575,7 +593,6 @@ class InstagramAnalyzer:
             
         except Exception as e:
             print(f"Error in visual emotion analysis: {e}")
-            # Always return a valid structure with default values
             return {
                 "visual_emotions": ["neutral"],
                 "brightness": 128,
@@ -588,16 +605,13 @@ def call_groq_model(prompt: str, system: str = None, max_tokens: int = 2048, gro
         return {"error": "GROQ API key not provided", "content": None}
     
     try:
-        # Initialize Groq client with API key
         client = Groq(api_key=groq_api_key)
         
-        # Prepare messages
         messages = []
         if system:
             messages.append({"role": "system", "content": system})
         messages.append({"role": "user", "content": prompt})
         
-        # Create completion
         completion = client.chat.completions.create(
             model="openai/gpt-oss-120b",
             messages=messages,
@@ -609,7 +623,6 @@ def call_groq_model(prompt: str, system: str = None, max_tokens: int = 2048, gro
             stop=None
         )
         
-        # Extract content from response
         content = completion.choices[0].message.content
         
         return {
@@ -626,9 +639,7 @@ def call_groq_model(prompt: str, system: str = None, max_tokens: int = 2048, gro
         print(f"Error calling Groq API: {e}")
         return {"error": str(e), "content": None}
 
-# Keep all the JSON schemas and prompt templates from the previous version...
-# (Including POST_SCHEMA, validate_post_data, ANALYSIS_SYSTEM_PROMPT, etc.)
-
+# Keep all the JSON schemas and prompt templates from the previous version
 POST_SCHEMA = {
     "type": "object",
     "properties": {
