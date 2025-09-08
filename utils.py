@@ -17,6 +17,7 @@ from datetime import datetime
 import time
 import nltk
 import jsonschema
+from groq import Groq
 
 # Download required NLTK data (run once)
 try:
@@ -331,6 +332,60 @@ class InstagramAnalyzer:
                 "score": 50
             }
 
+def call_groq_model(prompt: str, system: str = None, max_tokens: int = 2048, groq_api_key: str = None) -> Dict[str, Any]:
+    """
+    Call Groq API for LLM analysis using the official Groq client
+    
+    Args:
+        prompt: User prompt
+        system: System message (optional)
+        max_tokens: Maximum tokens to generate
+        groq_api_key: API key for Groq
+        
+    Returns:
+        Dictionary containing model response
+    """
+    if not groq_api_key:
+        return {"error": "GROQ API key not provided"}
+    
+    try:
+        # Initialize Groq client with API key
+        client = Groq(api_key=groq_api_key)
+        
+        # Prepare messages
+        messages = []
+        if system:
+            messages.append({"role": "system", "content": system})
+        messages.append({"role": "user", "content": prompt})
+        
+        # Create completion
+        completion = client.chat.completions.create(
+            model="openai/gpt-oss-120b",
+            messages=messages,
+            temperature=0.1,  # Lower temperature for more consistent results
+            max_completion_tokens=max_tokens,
+            top_p=1,
+            reasoning_effort="medium",
+            stream=False,  # Set to False for simpler handling
+            stop=None
+        )
+        
+        # Extract content from response
+        content = completion.choices[0].message.content
+        
+        return {
+            "content": content,
+            "usage": {
+                "prompt_tokens": completion.usage.prompt_tokens if hasattr(completion, 'usage') else 0,
+                "completion_tokens": completion.usage.completion_tokens if hasattr(completion, 'usage') else 0,
+                "total_tokens": completion.usage.total_tokens if hasattr(completion, 'usage') else 0
+            },
+            "error": None
+        }
+        
+    except Exception as e:
+        return {"error": str(e), "content": None}
+
 # JSON Schemas for validation
 POST_SCHEMA = {
     "type": "object",
@@ -413,58 +468,6 @@ def validate_post_data(post_data: Dict) -> bool:
         return True
     except jsonschema.ValidationError:
         return False
-def call_groq_model(prompt: str, system: str = None, max_tokens: int = 1024, groq_api_key: str = None) -> Dict[str, Any]:
-    """
-    Call Groq API for LLM analysis
-    
-    Args:
-        prompt: User prompt
-        system: System message (optional)
-        max_tokens: Maximum tokens to generate
-        groq_api_key: API key for Groq
-        
-    Returns:
-        Dictionary containing model response
-    """
-    if not groq_api_key:
-        return {"error": "GROQ API key not provided"}
-    
-    try:
-        headers = {
-            "Authorization": f"Bearer {groq_api_key}",
-            "Content-Type": "application/json"
-        }
-        
-        messages = []
-        if system:
-            messages.append({"role": "system", "content": system})
-        messages.append({"role": "user", "content": prompt})
-        
-        payload = {
-            "model": "llama3-8b-8192",  # Updated model name for Groq
-            "messages": messages,
-            "max_tokens": max_tokens,
-            "temperature": 0.1
-        }
-        
-        response = requests.post(
-            "https://api.groq.com/openai/v1/chat/completions",
-            headers=headers,
-            json=payload,
-            timeout=30
-        )
-        
-        response.raise_for_status()
-        result = response.json()
-        
-        return {
-            "content": result["choices"][0]["message"]["content"],
-            "usage": result.get("usage", {}),
-            "error": None
-        }
-        
-    except Exception as e:
-        return {"error": str(e), "content": None}
 
 # LLM Prompt Templates
 ANALYSIS_SYSTEM_PROMPT = """You are an expert social media analyst specializing in Instagram content analysis. 
