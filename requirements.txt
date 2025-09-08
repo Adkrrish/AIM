@@ -1,0 +1,11 @@
+streamlit
+pandas
+openpyxl
+requests
+Pillow
+numpy
+scikit-learn
+python-dotenv
+tqdm
+jsonschema
+nltk
