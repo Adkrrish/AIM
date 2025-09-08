@@ -53,15 +53,7 @@ class InstagramCaptionScraper:
                 print(f"❌ Failed to initialize Apify client: {e}")
     
     def scrape_post_caption(self, post_url: str) -> Dict[str, Any]:
-        """
-        Scrape only the caption from an Instagram post
-        
-        Args:
-            post_url: Instagram post URL
-            
-        Returns:
-            Dictionary containing caption data
-        """
+        """Scrape only the caption from an Instagram post"""
         if not self.client:
             return self._fallback_caption_scraping(post_url)
         
@@ -102,16 +94,6 @@ class InstagramCaptionScraper:
         except Exception as e:
             print(f"❌ Apify caption scraping error: {str(e)}")
             return self._fallback_caption_scraping(post_url)
-    
-    def scrape_multiple_captions(self, post_urls: List[str]) -> List[Dict[str, Any]]:
-        """Scrape captions from multiple posts"""
-        results = []
-        
-        for url in post_urls:
-            result = self.scrape_post_caption(url)
-            results.append(result)
-        
-        return results
     
     def _parse_apify_caption_result(self, item: Dict, original_url: str) -> Dict[str, Any]:
         """Parse Apify result focusing on caption data"""
@@ -443,7 +425,7 @@ Provide analysis in JSON format:
         # Brand consistency analysis
         brand_consistency = self._analyze_brand_consistency(caption_analysis, image_analysis)
         
-        # Content strategy insights
+        # Strategy insights
         strategy_insights = self._generate_strategy_insights(caption_analysis, image_analysis)
         
         # Recommendations
@@ -589,16 +571,3 @@ def call_groq_model(prompt: str, system: str = None, max_tokens: int = 2048, gro
     except Exception as e:
         print(f"Error calling Groq API: {e}")
         return {"error": str(e), "content": None}
-
-# Keep existing prompt templates for compatibility
-ANALYSIS_SYSTEM_PROMPT = """You are an expert social media analyst specializing in Instagram content analysis."""
-
-ANALYSIS_USER_PROMPT = """Analyze this Instagram post data and provide strategic insights."""
-
-SUGGESTION_SYSTEM_PROMPT = """You are a strategic social media consultant creating competitive analysis reports."""
-
-SUGGESTION_USER_PROMPT = """Based on competitor analysis data, generate strategic recommendations."""
-
-CAMPAIGN_PROMPT_SYSTEM = """You are a creative campaign prompt generator for social media marketing."""
-
-CAMPAIGN_PROMPT_USER = """Generate campaign prompts based on strategic recommendations."""
