@@ -1,6 +1,6 @@
 """
 Instagram Competitor Analysis Utilities
-Core functions for data processing and analysis
+Enhanced with multiple scraping approaches for better reliability
 """
 
 import os
@@ -30,7 +30,7 @@ except:
 from nltk.sentiment.vader import SentimentIntensityAnalyzer
 
 class InstagramAnalyzer:
-    """Main class for Instagram post analysis"""
+    """Main class for Instagram post analysis with multiple scraping methods"""
     
     def __init__(self, groq_api_key: str):
         self.groq_api_key = groq_api_key
@@ -47,7 +47,7 @@ class InstagramAnalyzer:
     
     def fetch_instagram_post(self, url: str) -> Dict[str, Any]:
         """
-        Fetch Instagram post data from URL
+        Fetch Instagram post data using multiple methods
         
         Args:
             url: Instagram post URL
@@ -55,13 +55,112 @@ class InstagramAnalyzer:
         Returns:
             Dictionary containing post data and metadata
         """
+        # Try different scraping methods in order of reliability
+        methods = [
+            self._method_graphql_endpoint,
+            self._method_json_endpoint,
+            self._method_html_scraping,
+            self._method_oembed
+        ]
+        
+        for method_name, method in enumerate(methods, 1):
+            try:
+                print(f"Trying method {method_name}: {method.__name__}")
+                result = method(url)
+                if result and not result.get("errors"):
+                    print(f"✅ Success with method {method_name}")
+                    return result
+                else:
+                    print(f"❌ Method {method_name} failed: {result.get('errors', 'Unknown error')}")
+            except Exception as e:
+                print(f"❌ Method {method_name} exception: {str(e)}")
+                continue
+        
+        # If all methods fail, return error
+        return {
+            "url": url,
+            "caption": None,
+            "image_url": None,
+            "timestamp": None,
+            "errors": "All scraping methods failed - Instagram may be blocking requests"
+        }
+    
+    def _method_graphql_endpoint(self, url: str) -> Dict[str, Any]:
+        """Method 1: Try Instagram's GraphQL endpoint"""
         try:
-            # Add additional headers to avoid blocking
+            # Extract shortcode from URL
+            match = re.search(r"/p/([a-zA-Z0-9_-]+)/", url)
+            if not match:
+                return {"errors": "Invalid Instagram post URL format"}
+            
+            shortcode = match.group(1)
+            
+            # Try GraphQL endpoint
+            graphql_url = "https://www.instagram.com/graphql/query/"
+            
+            # This requires specific query hash and variables - simplified version
+            headers = {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+                'X-Requested-With': 'XMLHttpRequest',
+                'Referer': url,
+                'Accept': 'application/json'
+            }
+            
+            # Try the shortcode media endpoint
+            api_url = f"https://www.instagram.com/p/{shortcode}/embed/captioned/"
+            response = self.session.get(api_url, headers=headers, timeout=15)
+            
+            if response.status_code == 200:
+                html_content = response.text
+                return self._parse_html_content(html_content, url)
+            else:
+                return {"errors": f"GraphQL method failed with status {response.status_code}"}
+                
+        except Exception as e:
+            return {"errors": f"GraphQL method error: {str(e)}"}
+    
+    def _method_json_endpoint(self, url: str) -> Dict[str, Any]:
+        """Method 2: Try JSON endpoint with __a=1 parameter"""
+        try:
+            match = re.search(r"/p/([a-zA-Z0-9_-]+)/", url)
+            if not match:
+                return {"errors": "Invalid Instagram post URL format"}
+            
+            shortcode = match.group(1)
+            
+            headers = {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+                'Accept': 'application/json, text/plain, */*',
+                'Accept-Language': 'en-US,en;q=0.9',
+                'Accept-Encoding': 'gzip, deflate, br',
+                'Referer': 'https://www.instagram.com/',
+                'X-Requested-With': 'XMLHttpRequest'
+            }
+            
+            api_url = f"https://www.instagram.com/p/{shortcode}/?__a=1&__d=dis"
+            response = self.session.get(api_url, headers=headers, timeout=15)
+            
+            if response.status_code == 200:
+                try:
+                    data = response.json()
+                    return self._parse_json_response(data, url)
+                except json.JSONDecodeError:
+                    # If JSON fails, try parsing as HTML
+                    return self._parse_html_content(response.text, url)
+            else:
+                return {"errors": f"JSON endpoint failed with status {response.status_code}"}
+                
+        except Exception as e:
+            return {"errors": f"JSON method error: {str(e)}"}
+    
+    def _method_html_scraping(self, url: str) -> Dict[str, Any]:
+        """Method 3: Traditional HTML scraping"""
+        try:
             headers = {
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36',
                 'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
                 'Accept-Language': 'en-US,en;q=0.5',
-                'Accept-Encoding': 'gzip, deflate',
+                'Accept-Encoding': 'gzip, deflate, br',
                 'Connection': 'keep-alive',
                 'Upgrade-Insecure-Requests': '1',
             }
@@ -69,17 +168,76 @@ class InstagramAnalyzer:
             response = self.session.get(url, headers=headers, timeout=15)
             response.raise_for_status()
             
-            html_content = response.text
-            print(f"Fetched HTML content length: {len(html_content)}")  # Debug
+            return self._parse_html_content(response.text, url)
             
-            # Extract caption using regex patterns
-            caption = self._extract_caption(html_content)
+        except Exception as e:
+            return {"errors": f"HTML scraping error: {str(e)}"}
+    
+    def _method_oembed(self, url: str) -> Dict[str, Any]:
+        """Method 4: Try Instagram's oEmbed endpoint"""
+        try:
+            oembed_url = f"https://api.instagram.com/oembed/?url={url}"
+            
+            headers = {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+            }
+            
+            response = self.session.get(oembed_url, headers=headers, timeout=15)
+            
+            if response.status_code == 200:
+                data = response.json()
+                
+                # Extract what we can from oEmbed
+                return {
+                    "url": url,
+                    "caption": None,  # oEmbed doesn't provide caption
+                    "image_url": data.get('thumbnail_url'),
+                    "timestamp": None,
+                    "errors": None
+                }
+            else:
+                return {"errors": f"oEmbed failed with status {response.status_code}"}
+                
+        except Exception as e:
+            return {"errors": f"oEmbed method error: {str(e)}"}
+    
+    def _parse_json_response(self, data: Dict, url: str) -> Dict[str, Any]:
+        """Parse JSON response from Instagram API"""
+        try:
+            # Handle different JSON response structures
+            if 'graphql' in data:
+                media = data['graphql']['shortcode_media']
+            elif 'items' in data and data['items']:
+                media = data['items'][0]
+            else:
+                return {"errors": "Unrecognized JSON structure"}
+            
+            # Extract caption
+            caption = None
+            if 'edge_media_to_caption' in media:
+                edges = media['edge_media_to_caption']['edges']
+                if edges:
+                    caption = edges[0]['node']['text']
+            elif 'caption' in media and media['caption']:
+                caption = media['caption'].get('text', '')
             
             # Extract image URL
-            image_url = self._extract_image_url(html_content)
+            image_url = None
+            if 'display_url' in media:
+                image_url = media['display_url']
+            elif 'image_versions2' in media:
+                candidates = media['image_versions2']['candidates']
+                if candidates:
+                    image_url = candidates[0]['url']
+            elif 'thumbnail_src' in media:
+                image_url = media['thumbnail_src']
             
             # Extract timestamp
-            timestamp = self._extract_timestamp(html_content)
+            timestamp = None
+            if 'taken_at_timestamp' in media:
+                timestamp = datetime.fromtimestamp(media['taken_at_timestamp']).isoformat()
+            elif 'taken_at' in media:
+                timestamp = datetime.fromtimestamp(media['taken_at']).isoformat()
             
             return {
                 "url": url,
@@ -90,111 +248,131 @@ class InstagramAnalyzer:
             }
             
         except Exception as e:
-            print(f"Error fetching Instagram post {url}: {str(e)}")
+            return {"errors": f"JSON parsing error: {str(e)}"}
+    
+    def _parse_html_content(self, html_content: str, url: str) -> Dict[str, Any]:
+        """Parse HTML content for Instagram post data"""
+        try:
+            # Extract caption using multiple patterns
+            caption = self._extract_caption_safe(html_content)
+            
+            # Extract image URL using multiple patterns
+            image_url = self._extract_image_url_safe(html_content)
+            
+            # Extract timestamp
+            timestamp = self._extract_timestamp_safe(html_content)
+            
             return {
                 "url": url,
-                "caption": None,
-                "image_url": None,
-                "timestamp": None,
-                "errors": str(e)
+                "caption": caption,
+                "image_url": image_url,
+                "timestamp": timestamp,
+                "errors": None
             }
+            
+        except Exception as e:
+            return {"errors": f"HTML parsing error: {str(e)}"}
     
-    def _extract_caption(self, html: str) -> Optional[str]:
-        """Extract caption from Instagram HTML"""
+    def _extract_caption_safe(self, html: str) -> Optional[str]:
+        """Safely extract caption from HTML"""
+        if not html:
+            return None
+            
         patterns = [
             r'"caption":"([^"]*)"',
             r'<meta property="og:description" content="([^"]*)"',
             r'"accessibility_caption":"([^"]*)"',
             r'"edge_media_to_caption":\s*{"edges":\s*\[{"node":\s*{"text":\s*"([^"]*)"',
-            r'<meta name="description" content="([^"]*)"'
+            r'<meta name="description" content="([^"]*)"',
+            r'"text":"([^"]*)"[^}]*"shortcode"',
         ]
         
         for pattern in patterns:
-            match = re.search(pattern, html)
-            if match:
-                caption = match.group(1)
-                try:
-                    # Decode unicode escapes
-                    caption = caption.encode().decode('unicode_escape')
-                    if len(caption.strip()) > 10:  # Only return substantial captions
-                        print(f"Found caption: {caption[:50]}...")  # Debug
+            try:
+                match = re.search(pattern, html)
+                if match:
+                    caption = match.group(1)
+                    if caption and len(caption.strip()) > 5:  # Only return substantial captions
+                        try:
+                            # Safely decode unicode escapes
+                            caption = caption.encode('utf-8').decode('unicode_escape')
+                        except (UnicodeDecodeError, AttributeError):
+                            # If decoding fails, return as-is
+                            pass
                         return caption[:1000]  # Limit length
-                except Exception as e:
-                    print(f"Error decoding caption: {e}")
-                    continue
+            except Exception:
+                continue
         
-        print("No caption found")  # Debug
         return None
     
-    def _extract_image_url(self, html: str) -> Optional[str]:
-        """Extract image URL from Instagram HTML - Enhanced version"""
+    def _extract_image_url_safe(self, html: str) -> Optional[str]:
+        """Safely extract image URL from HTML"""
+        if not html:
+            return None
+            
         patterns = [
-            # Original patterns
             r'"display_url":"([^"]*)"',
             r'<meta property="og:image" content="([^"]*)"',
-            r'"src":"([^"]*\.jpg[^"]*)"',
-            
-            # Additional patterns for different Instagram formats
             r'"thumbnail_src":"([^"]*)"',
-            r'"config_width":1080[^}]*"src":"([^"]*)"',
-            r'<meta name="medium" content="image"[^>]*>\s*<meta property="og:image" content="([^"]*)"',
-            r'"image":\s*{\s*"uri":\s*"([^"]*)"',
-            
-            # Pattern for reels and posts
-            r'"carousel_media":\s*\[{"id"[^}]*"image_versions2"[^}]*"candidates":\s*\[{"width":\s*1080[^}]*"url":\s*"([^"]*)"',
-            
-            # More generic patterns
+            r'"src":"([^"]*\.jpg[^"]*)"',
             r'"image_versions2":\s*{"candidates":\s*\[{"width":\s*1080[^}]*"url":\s*"([^"]*)"',
             r'"display_resources":\s*\[[^}]*{"src":\s*"([^"]*)"[^}]*"config_width":\s*1080',
+            r'<meta name="twitter:image" content="([^"]*)"',
         ]
         
         for pattern in patterns:
-            matches = re.findall(pattern, html)
-            for match in matches:
-                try:
-                    # Handle different match formats
+            try:
+                matches = re.findall(pattern, html)
+                for match in matches:
                     url = match if isinstance(match, str) else match[0] if match else ""
                     
-                    # Decode unicode escapes
-                    url = url.encode().decode('unicode_escape')
-                    
-                    # Validate URL
-                    if url and url.startswith('http') and ('instagram' in url or 'cdninstagram' in url or 'fbcdn' in url):
-                        print(f"Found image URL: {url[:50]}...")  # Debug
-                        return url
-                except Exception as e:
-                    print(f"Error processing image URL pattern: {e}")
-                    continue
+                    if url:
+                        try:
+                            # Safely decode unicode escapes
+                            url = url.encode('utf-8').decode('unicode_escape')
+                        except (UnicodeDecodeError, AttributeError):
+                            pass
+                        
+                        # Validate URL
+                        if url.startswith('http') and any(domain in url for domain in ['instagram', 'cdninstagram', 'fbcdn']):
+                            return url
+            except Exception:
+                continue
         
-        print("No valid image URL found")  # Debug
         return None
     
-    def _extract_timestamp(self, html: str) -> Optional[str]:
-        """Extract timestamp from Instagram HTML"""
+    def _extract_timestamp_safe(self, html: str) -> Optional[str]:
+        """Safely extract timestamp from HTML"""
+        if not html:
+            return None
+            
         patterns = [
             r'"taken_at_timestamp":(\d+)',
             r'"date":"([^"]*)"',
             r'"taken_at":(\d+)',
-            r'datetime="([^"]*)"'
+            r'datetime="([^"]*)"',
+            r'"uploadDate":"([^"]*)"'
         ]
         
         for pattern in patterns:
-            match = re.search(pattern, html)
-            if match:
-                try:
+            try:
+                match = re.search(pattern, html)
+                if match:
                     if pattern.endswith('(\\d+)'):  # Unix timestamp
                         timestamp = int(match.group(1))
                         return datetime.fromtimestamp(timestamp).isoformat()
                     else:
                         return match.group(1)
-                except Exception as e:
-                    print(f"Error processing timestamp: {e}")
-                    continue
+            except Exception:
+                continue
         
         return None
     
     def download_image(self, url: str) -> Optional[bytes]:
-        """Download image from URL"""
+        """Download image from URL with better error handling"""
+        if not url:
+            return None
+            
         try:
             headers = {
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
@@ -205,7 +383,7 @@ class InstagramAnalyzer:
             response = self.session.get(url, headers=headers, timeout=20)
             response.raise_for_status()
             
-            print(f"Downloaded image: {len(response.content)} bytes")  # Debug
+            print(f"Downloaded image: {len(response.content)} bytes")
             return response.content
         except Exception as e:
             print(f"Error downloading image: {e}")
@@ -213,10 +391,13 @@ class InstagramAnalyzer:
     
     def image_to_pil(self, image_bytes: bytes) -> Optional[Image.Image]:
         """Convert image bytes to PIL Image"""
+        if not image_bytes:
+            return None
+            
         try:
             from io import BytesIO
             image = Image.open(BytesIO(image_bytes)).convert('RGB')
-            print(f"Converted to PIL image: {image.size}")  # Debug
+            print(f"Converted to PIL image: {image.size}")
             return image
         except Exception as e:
             print(f"Error converting to PIL: {e}")
@@ -244,7 +425,7 @@ class InstagramAnalyzer:
                 )
                 colors.append(hex_color)
             
-            print(f"Extracted colors: {colors}")  # Debug
+            print(f"Extracted colors: {colors}")
             return colors
             
         except Exception as e:
@@ -351,7 +532,7 @@ class InstagramAnalyzer:
         }
     
     def analyze_visual_emotions(self, image: Image.Image) -> Dict[str, Any]:
-        """Analyze visual emotions using simple heuristics - FIXED VERSION"""
+        """Analyze visual emotions using simple heuristics"""
         try:
             # Convert to numpy for basic analysis
             img_array = np.array(image)
@@ -389,7 +570,7 @@ class InstagramAnalyzer:
                 "score": min(100, int(brightness * 0.5 + 25))  # Simple scoring
             }
             
-            print(f"Visual emotions analyzed: {result}")  # Debug
+            print(f"Visual emotions analyzed: {result}")
             return result
             
         except Exception as e:
@@ -402,18 +583,7 @@ class InstagramAnalyzer:
             }
 
 def call_groq_model(prompt: str, system: str = None, max_tokens: int = 2048, groq_api_key: str = None) -> Dict[str, Any]:
-    """
-    Call Groq API for LLM analysis using the official Groq client
-    
-    Args:
-        prompt: User prompt
-        system: System message (optional)
-        max_tokens: Maximum tokens to generate
-        groq_api_key: API key for Groq
-        
-    Returns:
-        Dictionary containing model response
-    """
+    """Call Groq API for LLM analysis using the official Groq client"""
     if not groq_api_key:
         return {"error": "GROQ API key not provided", "content": None}
     
@@ -431,11 +601,11 @@ def call_groq_model(prompt: str, system: str = None, max_tokens: int = 2048, gro
         completion = client.chat.completions.create(
             model="openai/gpt-oss-120b",
             messages=messages,
-            temperature=0.1,  # Lower temperature for more consistent results
+            temperature=0.1,
             max_completion_tokens=max_tokens,
             top_p=1,
             reasoning_effort="medium",
-            stream=False,  # Set to False for simpler handling
+            stream=False,
             stop=None
         )
         
@@ -456,7 +626,9 @@ def call_groq_model(prompt: str, system: str = None, max_tokens: int = 2048, gro
         print(f"Error calling Groq API: {e}")
         return {"error": str(e), "content": None}
 
-# JSON Schemas for validation
+# Keep all the JSON schemas and prompt templates from the previous version...
+# (Including POST_SCHEMA, validate_post_data, ANALYSIS_SYSTEM_PROMPT, etc.)
+
 POST_SCHEMA = {
     "type": "object",
     "properties": {
@@ -540,7 +712,7 @@ def validate_post_data(post_data: Dict) -> bool:
         print(f"Validation error: {e}")
         return False
 
-# LLM Prompt Templates
+# LLM Prompt Templates (same as before)
 ANALYSIS_SYSTEM_PROMPT = """You are an expert social media analyst specializing in Instagram content analysis. 
 Analyze the provided Instagram post data and return a structured JSON response following the exact schema provided.
 Focus on actionable insights for competitive analysis and campaign planning.
