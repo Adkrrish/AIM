@@ -36,7 +36,7 @@ class InstagramAnalyzer:
         self.groq_api_key = groq_api_key
         self.session = requests.Session()
         self.session.headers.update({
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36'
         })
         
         # Initialize sentiment analyzer
@@ -56,10 +56,21 @@ class InstagramAnalyzer:
             Dictionary containing post data and metadata
         """
         try:
-            response = self.session.get(url, timeout=10)
+            # Add additional headers to avoid blocking
+            headers = {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36',
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+                'Accept-Language': 'en-US,en;q=0.5',
+                'Accept-Encoding': 'gzip, deflate',
+                'Connection': 'keep-alive',
+                'Upgrade-Insecure-Requests': '1',
+            }
+            
+            response = self.session.get(url, headers=headers, timeout=15)
             response.raise_for_status()
             
             html_content = response.text
+            print(f"Fetched HTML content length: {len(html_content)}")  # Debug
             
             # Extract caption using regex patterns
             caption = self._extract_caption(html_content)
@@ -79,6 +90,7 @@ class InstagramAnalyzer:
             }
             
         except Exception as e:
+            print(f"Error fetching Instagram post {url}: {str(e)}")
             return {
                 "url": url,
                 "caption": None,
@@ -92,67 +104,108 @@ class InstagramAnalyzer:
         patterns = [
             r'"caption":"([^"]*)"',
             r'<meta property="og:description" content="([^"]*)"',
-            r'"accessibility_caption":"([^"]*)"'
+            r'"accessibility_caption":"([^"]*)"',
+            r'"edge_media_to_caption":\s*{"edges":\s*\[{"node":\s*{"text":\s*"([^"]*)"',
+            r'<meta name="description" content="([^"]*)"'
         ]
         
         for pattern in patterns:
             match = re.search(pattern, html)
             if match:
                 caption = match.group(1)
-                # Decode unicode escapes
                 try:
+                    # Decode unicode escapes
                     caption = caption.encode().decode('unicode_escape')
-                except:
-                    pass
-                return caption[:1000]  # Limit length
+                    if len(caption.strip()) > 10:  # Only return substantial captions
+                        print(f"Found caption: {caption[:50]}...")  # Debug
+                        return caption[:1000]  # Limit length
+                except Exception as e:
+                    print(f"Error decoding caption: {e}")
+                    continue
         
+        print("No caption found")  # Debug
         return None
     
     def _extract_image_url(self, html: str) -> Optional[str]:
-        """Extract image URL from Instagram HTML"""
+        """Extract image URL from Instagram HTML - Enhanced version"""
         patterns = [
+            # Original patterns
             r'"display_url":"([^"]*)"',
             r'<meta property="og:image" content="([^"]*)"',
-            r'"src":"([^"]*\.jpg[^"]*)"'
+            r'"src":"([^"]*\.jpg[^"]*)"',
+            
+            # Additional patterns for different Instagram formats
+            r'"thumbnail_src":"([^"]*)"',
+            r'"config_width":1080[^}]*"src":"([^"]*)"',
+            r'<meta name="medium" content="image"[^>]*>\s*<meta property="og:image" content="([^"]*)"',
+            r'"image":\s*{\s*"uri":\s*"([^"]*)"',
+            
+            # Pattern for reels and posts
+            r'"carousel_media":\s*\[{"id"[^}]*"image_versions2"[^}]*"candidates":\s*\[{"width":\s*1080[^}]*"url":\s*"([^"]*)"',
+            
+            # More generic patterns
+            r'"image_versions2":\s*{"candidates":\s*\[{"width":\s*1080[^}]*"url":\s*"([^"]*)"',
+            r'"display_resources":\s*\[[^}]*{"src":\s*"([^"]*)"[^}]*"config_width":\s*1080',
         ]
         
         for pattern in patterns:
-            match = re.search(pattern, html)
-            if match:
-                url = match.group(1)
-                # Decode unicode escapes
+            matches = re.findall(pattern, html)
+            for match in matches:
                 try:
+                    # Handle different match formats
+                    url = match if isinstance(match, str) else match[0] if match else ""
+                    
+                    # Decode unicode escapes
                     url = url.encode().decode('unicode_escape')
-                except:
-                    pass
-                if url.startswith('http'):
-                    return url
+                    
+                    # Validate URL
+                    if url and url.startswith('http') and ('instagram' in url or 'cdninstagram' in url or 'fbcdn' in url):
+                        print(f"Found image URL: {url[:50]}...")  # Debug
+                        return url
+                except Exception as e:
+                    print(f"Error processing image URL pattern: {e}")
+                    continue
         
+        print("No valid image URL found")  # Debug
         return None
     
     def _extract_timestamp(self, html: str) -> Optional[str]:
         """Extract timestamp from Instagram HTML"""
         patterns = [
             r'"taken_at_timestamp":(\d+)',
-            r'"date":"([^"]*)"'
+            r'"date":"([^"]*)"',
+            r'"taken_at":(\d+)',
+            r'datetime="([^"]*)"'
         ]
         
         for pattern in patterns:
             match = re.search(pattern, html)
             if match:
-                if pattern.endswith('(\\d+)'):  # Unix timestamp
-                    timestamp = int(match.group(1))
-                    return datetime.fromtimestamp(timestamp).isoformat()
-                else:
-                    return match.group(1)
+                try:
+                    if pattern.endswith('(\\d+)'):  # Unix timestamp
+                        timestamp = int(match.group(1))
+                        return datetime.fromtimestamp(timestamp).isoformat()
+                    else:
+                        return match.group(1)
+                except Exception as e:
+                    print(f"Error processing timestamp: {e}")
+                    continue
         
         return None
     
     def download_image(self, url: str) -> Optional[bytes]:
         """Download image from URL"""
         try:
-            response = self.session.get(url, timeout=15)
+            headers = {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+                'Referer': 'https://www.instagram.com/',
+                'Accept': 'image/webp,image/apng,image/*,*/*;q=0.8'
+            }
+            
+            response = self.session.get(url, headers=headers, timeout=20)
             response.raise_for_status()
+            
+            print(f"Downloaded image: {len(response.content)} bytes")  # Debug
             return response.content
         except Exception as e:
             print(f"Error downloading image: {e}")
@@ -162,7 +215,9 @@ class InstagramAnalyzer:
         """Convert image bytes to PIL Image"""
         try:
             from io import BytesIO
-            return Image.open(BytesIO(image_bytes)).convert('RGB')
+            image = Image.open(BytesIO(image_bytes)).convert('RGB')
+            print(f"Converted to PIL image: {image.size}")  # Debug
+            return image
         except Exception as e:
             print(f"Error converting to PIL: {e}")
             return None
@@ -189,6 +244,7 @@ class InstagramAnalyzer:
                 )
                 colors.append(hex_color)
             
+            print(f"Extracted colors: {colors}")  # Debug
             return colors
             
         except Exception as e:
@@ -213,7 +269,7 @@ class InstagramAnalyzer:
         # Extract keywords (simple approach)
         words = re.findall(r'\b\w+\b', caption.lower())
         # Remove common stop words
-        stop_words = {'the', 'a', 'an', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for', 'of', 'with', 'by'}
+        stop_words = {'the', 'a', 'an', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for', 'of', 'with', 'by', 'is', 'are', 'was', 'were', 'be', 'been', 'being', 'have', 'has', 'had', 'do', 'does', 'did', 'will', 'would', 'could', 'should', 'may', 'might', 'must', 'can', 'this', 'that', 'these', 'those', 'i', 'you', 'he', 'she', 'it', 'we', 'they', 'me', 'him', 'her', 'us', 'them'}
         keywords = [word for word in words if word not in stop_words and len(word) > 3]
         
         # Count word frequency
@@ -223,8 +279,8 @@ class InstagramAnalyzer:
         
         # Detect CTA
         cta_patterns = [
-            r'\b(click|swipe|tap|visit|shop|buy|order|book|subscribe|follow|like|share|comment)\b',
-            r'\b(link in bio|dm us|contact us|call now|order now)\b'
+            r'\b(click|swipe|tap|visit|shop|buy|order|book|subscribe|follow|like|share|comment|dm|message)\b',
+            r'\b(link in bio|dm us|contact us|call now|order now|swipe up|learn more|get yours|check out)\b'
         ]
         
         cta_detected = False
@@ -237,7 +293,7 @@ class InstagramAnalyzer:
                 break
         
         # Simple readability score (based on sentence and word length)
-        sentences = caption.split('.')
+        sentences = [s.strip() for s in caption.split('.') if s.strip()]
         avg_sentence_length = sum(len(s.split()) for s in sentences) / max(len(sentences), 1)
         readability_score = max(0, 100 - (avg_sentence_length * 2))  # Simple formula
         
@@ -308,11 +364,9 @@ class InstagramAnalyzer:
             emotions = []
             
             if brightness > 180:
-                emotions.append("bright")
-                emotions.append("energetic")
+                emotions.extend(["bright", "energetic"])
             elif brightness < 80:
-                emotions.append("moody")
-                emotions.append("dramatic")
+                emotions.extend(["moody", "dramatic"])
             else:
                 emotions.append("balanced")
             
@@ -327,13 +381,16 @@ class InstagramAnalyzer:
             
             # Ensure emotions is never empty
             if not emotions:
-                emotions.append("neutral")
+                emotions = ["neutral"]
             
-            return {
+            result = {
                 "visual_emotions": emotions[:3],  # Limit to 3, guaranteed to have at least one
                 "brightness": int(brightness),
                 "score": min(100, int(brightness * 0.5 + 25))  # Simple scoring
             }
+            
+            print(f"Visual emotions analyzed: {result}")  # Debug
+            return result
             
         except Exception as e:
             print(f"Error in visual emotion analysis: {e}")
@@ -531,8 +588,7 @@ Return a JSON object with this exact structure:
 
 SUGGESTION_SYSTEM_PROMPT = """You are a strategic social media consultant creating competitive analysis reports.
 Generate three distinct strategy recommendations (A, B, C) based on competitor analysis data.
-Each strategy should have 6 actionable recommendations covering: color palette, tone of voice, CTA approach, hashtag strategy, readability optimization, and emotional appeal.
-Include 3 campaign prompt sets per strategy."""
+Each strategy should have 6 actionable recommendations covering: color palette, tone of voice, CTA approach, hashtag strategy, readability optimization, and emotional appeal."""
 
 SUGGESTION_USER_PROMPT = """Based on this competitor analysis data:
 
