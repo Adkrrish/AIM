@@ -10,3 +10,4 @@ tqdm
 jsonschema
 nltk
 groq
+apify-client
