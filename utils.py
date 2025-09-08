@@ -100,7 +100,10 @@ class InstagramAnalyzer:
             if match:
                 caption = match.group(1)
                 # Decode unicode escapes
-                caption = caption.encode().decode('unicode_escape')
+                try:
+                    caption = caption.encode().decode('unicode_escape')
+                except:
+                    pass
                 return caption[:1000]  # Limit length
         
         return None
@@ -118,7 +121,10 @@ class InstagramAnalyzer:
             if match:
                 url = match.group(1)
                 # Decode unicode escapes
-                url = url.encode().decode('unicode_escape')
+                try:
+                    url = url.encode().decode('unicode_escape')
+                except:
+                    pass
                 if url.startswith('http'):
                     return url
         
@@ -289,7 +295,7 @@ class InstagramAnalyzer:
         }
     
     def analyze_visual_emotions(self, image: Image.Image) -> Dict[str, Any]:
-        """Analyze visual emotions using simple heuristics"""
+        """Analyze visual emotions using simple heuristics - FIXED VERSION"""
         try:
             # Convert to numpy for basic analysis
             img_array = np.array(image)
@@ -319,13 +325,19 @@ class InstagramAnalyzer:
             elif g > r and g > b:
                 emotions.append("natural")
             
+            # Ensure emotions is never empty
+            if not emotions:
+                emotions.append("neutral")
+            
             return {
-                "visual_emotions": emotions[:3],  # Limit to 3
+                "visual_emotions": emotions[:3],  # Limit to 3, guaranteed to have at least one
                 "brightness": int(brightness),
                 "score": min(100, int(brightness * 0.5 + 25))  # Simple scoring
             }
             
         except Exception as e:
+            print(f"Error in visual emotion analysis: {e}")
+            # Always return a valid structure with default values
             return {
                 "visual_emotions": ["neutral"],
                 "brightness": 128,
@@ -346,7 +358,7 @@ def call_groq_model(prompt: str, system: str = None, max_tokens: int = 2048, gro
         Dictionary containing model response
     """
     if not groq_api_key:
-        return {"error": "GROQ API key not provided"}
+        return {"error": "GROQ API key not provided", "content": None}
     
     try:
         # Initialize Groq client with API key
@@ -376,14 +388,15 @@ def call_groq_model(prompt: str, system: str = None, max_tokens: int = 2048, gro
         return {
             "content": content,
             "usage": {
-                "prompt_tokens": completion.usage.prompt_tokens if hasattr(completion, 'usage') else 0,
-                "completion_tokens": completion.usage.completion_tokens if hasattr(completion, 'usage') else 0,
-                "total_tokens": completion.usage.total_tokens if hasattr(completion, 'usage') else 0
+                "prompt_tokens": completion.usage.prompt_tokens if hasattr(completion, 'usage') and completion.usage else 0,
+                "completion_tokens": completion.usage.completion_tokens if hasattr(completion, 'usage') and completion.usage else 0,
+                "total_tokens": completion.usage.total_tokens if hasattr(completion, 'usage') and completion.usage else 0
             },
             "error": None
         }
         
     except Exception as e:
+        print(f"Error calling Groq API: {e}")
         return {"error": str(e), "content": None}
 
 # JSON Schemas for validation
@@ -466,7 +479,8 @@ def validate_post_data(post_data: Dict) -> bool:
     try:
         jsonschema.validate(post_data, POST_SCHEMA)
         return True
-    except jsonschema.ValidationError:
+    except jsonschema.ValidationError as e:
+        print(f"Validation error: {e}")
         return False
 
 # LLM Prompt Templates
@@ -540,8 +554,32 @@ Generate 3 strategic recommendations as JSON:
             ],
             "confidence_score": 1-100
         }},
-        "strategy_b": {{ ... }},
-        "strategy_c": {{ ... }}
+        "strategy_b": {{
+            "name": "Strategy Name",
+            "description": "Brief strategy description",
+            "recommendations": [
+                {{"parameter": "color_palette", "action": "specific action", "rationale": "why this works", "kpi": "measurable outcome"}},
+                {{"parameter": "tone_of_voice", "action": "specific action", "rationale": "why this works", "kpi": "measurable outcome"}},
+                {{"parameter": "cta", "action": "specific action", "rationale": "why this works", "kpi": "measurable outcome"}},
+                {{"parameter": "hashtags", "action": "specific action", "rationale": "why this works", "kpi": "measurable outcome"}},
+                {{"parameter": "readability", "action": "specific action", "rationale": "why this works", "kpi": "measurable outcome"}},
+                {{"parameter": "emotional_appeal", "action": "specific action", "rationale": "why this works", "kpi": "measurable outcome"}}
+            ],
+            "confidence_score": 1-100
+        }},
+        "strategy_c": {{
+            "name": "Strategy Name", 
+            "description": "Brief strategy description",
+            "recommendations": [
+                {{"parameter": "color_palette", "action": "specific action", "rationale": "why this works", "kpi": "measurable outcome"}},
+                {{"parameter": "tone_of_voice", "action": "specific action", "rationale": "why this works", "kpi": "measurable outcome"}},
+                {{"parameter": "cta", "action": "specific action", "rationale": "why this works", "kpi": "measurable outcome"}},
+                {{"parameter": "hashtags", "action": "specific action", "rationale": "why this works", "kpi": "measurable outcome"}},
+                {{"parameter": "readability", "action": "specific action", "rationale": "why this works", "kpi": "measurable outcome"}},
+                {{"parameter": "emotional_appeal", "action": "specific action", "rationale": "why this works", "kpi": "measurable outcome"}}
+            ],
+            "confidence_score": 1-100
+        }}
     }}
 }}"""
 
@@ -567,6 +605,21 @@ Return JSON with 3 campaign sets:
             "caption_starter": "Engaging caption opening...",
             "model_ready_prompt": "Concise prompt for AI tools"
         }},
-        // ... 2 more sets
+        {{
+            "name": "Campaign Set 2",
+            "image_prompt": "Detailed image generation prompt",
+            "video_prompt": "Detailed short video prompt",
+            "hashtags": ["#tag1", "#tag2", "#tag3"],
+            "caption_starter": "Engaging caption opening...",
+            "model_ready_prompt": "Concise prompt for AI tools"
+        }},
+        {{
+            "name": "Campaign Set 3",
+            "image_prompt": "Detailed image generation prompt",
+            "video_prompt": "Detailed short video prompt",
+            "hashtags": ["#tag1", "#tag2", "#tag3"],
+            "caption_starter": "Engaging caption opening...",
+            "model_ready_prompt": "Concise prompt for AI tools"
+        }}
     ]
 }}"""
