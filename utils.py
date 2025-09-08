@@ -163,7 +163,7 @@ class InstagramCaptionScraper:
                 continue
         return None
 
-class SixParameterAnalyzer:
+class CombinedAnalyzer:
     """Analyzer based on the 6 core parameters for competitor analysis"""
     
     def __init__(self, groq_api_key: str):
@@ -739,40 +739,40 @@ Generate 3 suggestion sets focusing on different parameter combinations:
 
 {{
     "suggestion_set_1": {{
-        "name": "Strategy Name",
-        "focus_parameters": ["parameter_1", "parameter_2"],
-        "approach_description": "Clear description of this strategic approach",
-        "color_visual_strategy": "specific visual direction",
-        "tone_voice_strategy": "specific tone recommendation",
-        "cta_strategy": "specific CTA approach",
-        "hashtag_strategy": "specific hashtag approach",
-        "readability_strategy": "specific readability approach", 
-        "emotional_strategy": "specific emotional approach",
-        "expected_impact": "high|medium|low"
+        "name": "Visual Impact Strategy",
+        "focus_parameters": ["color_palette", "emotional_appeal"],
+        "approach_description": "Focus on strong visual branding and emotional connection",
+        "color_visual_strategy": "Use bright, engaging colors with consistent visual identity",
+        "tone_voice_strategy": "Maintain enthusiastic and inspiring tone",
+        "cta_strategy": "Strong visual CTAs with emotional triggers",
+        "hashtag_strategy": "Visual-focused hashtags for discovery",
+        "readability_strategy": "Short, impactful captions with clear benefits", 
+        "emotional_strategy": "Create strong emotional connections through imagery and language",
+        "expected_impact": "high"
     }},
     "suggestion_set_2": {{
-        "name": "Strategy Name",
-        "focus_parameters": ["parameter_3", "parameter_4"],
-        "approach_description": "Clear description of this strategic approach",
-        "color_visual_strategy": "specific visual direction",
-        "tone_voice_strategy": "specific tone recommendation", 
-        "cta_strategy": "specific CTA approach",
-        "hashtag_strategy": "specific hashtag approach",
-        "readability_strategy": "specific readability approach",
-        "emotional_strategy": "specific emotional approach", 
-        "expected_impact": "high|medium|low"
+        "name": "Engagement Optimization Strategy",
+        "focus_parameters": ["cta_presence", "hashtag_strategy"],
+        "approach_description": "Maximize conversions through strategic CTAs and discoverability",
+        "color_visual_strategy": "Clean, professional visuals that support CTAs",
+        "tone_voice_strategy": "Direct and action-oriented communication",
+        "cta_strategy": "Multiple strong CTAs with clear value propositions",
+        "hashtag_strategy": "Strategic mix of trending and niche hashtags",
+        "readability_strategy": "Scannable format with clear benefits and calls-to-action",
+        "emotional_strategy": "Create urgency and FOMO to drive immediate action",
+        "expected_impact": "high"
     }},
     "suggestion_set_3": {{
-        "name": "Strategy Name", 
-        "focus_parameters": ["parameter_5", "parameter_6"],
-        "approach_description": "Clear description of this strategic approach",
-        "color_visual_strategy": "specific visual direction",
-        "tone_voice_strategy": "specific tone recommendation",
-        "cta_strategy": "specific CTA approach", 
-        "hashtag_strategy": "specific hashtag approach",
-        "readability_strategy": "specific readability approach",
-        "emotional_strategy": "specific emotional approach",
-        "expected_impact": "high|medium|low"
+        "name": "Content Authority Strategy",
+        "focus_parameters": ["tone_of_voice", "readability"],
+        "approach_description": "Build trust and authority through expert positioning",
+        "color_visual_strategy": "Professional, consistent brand colors conveying trust",
+        "tone_voice_strategy": "Authoritative yet approachable expert voice",
+        "cta_strategy": "Educational CTAs focused on value and learning",
+        "hashtag_strategy": "Industry and expertise-focused hashtags",
+        "readability_strategy": "Well-structured, informative content that educates",
+        "emotional_strategy": "Build trust and credibility through expertise demonstration",
+        "expected_impact": "medium"
     }}
 }}"""
     
@@ -788,7 +788,45 @@ Generate 3 suggestion sets focusing on different parameter combinations:
     except:
         pass
     
-    return {"error": "Could not generate suggestion sets"}
+    # Fallback suggestions
+    return {
+        "suggestion_set_1": {
+            "name": "Visual Impact Strategy",
+            "focus_parameters": ["color_palette", "emotional_appeal"],
+            "approach_description": "Focus on strong visual branding and emotional connection",
+            "color_visual_strategy": "Use bright, engaging colors",
+            "tone_voice_strategy": "Enthusiastic and inspiring tone",
+            "cta_strategy": "Strong visual CTAs",
+            "hashtag_strategy": "Visual-focused hashtags",
+            "readability_strategy": "Short, impactful captions",
+            "emotional_strategy": "Strong emotional connections",
+            "expected_impact": "high"
+        },
+        "suggestion_set_2": {
+            "name": "Engagement Strategy",
+            "focus_parameters": ["cta_presence", "hashtag_strategy"],
+            "approach_description": "Maximize conversions and discoverability",
+            "color_visual_strategy": "Professional visuals",
+            "tone_voice_strategy": "Direct and action-oriented",
+            "cta_strategy": "Multiple strong CTAs",
+            "hashtag_strategy": "Strategic hashtag mix",
+            "readability_strategy": "Scannable content",
+            "emotional_strategy": "Create urgency",
+            "expected_impact": "high"
+        },
+        "suggestion_set_3": {
+            "name": "Authority Strategy", 
+            "focus_parameters": ["tone_of_voice", "readability"],
+            "approach_description": "Build trust through expertise",
+            "color_visual_strategy": "Professional brand colors",
+            "tone_voice_strategy": "Authoritative expert voice",
+            "cta_strategy": "Educational CTAs",
+            "hashtag_strategy": "Industry hashtags",
+            "readability_strategy": "Informative content",
+            "emotional_strategy": "Build credibility",
+            "expected_impact": "medium"
+        }
+    }
 
 def _aggregate_parameter_insights(competitor_analyses: List[Dict]) -> Dict[str, Any]:
     """Aggregate insights from competitor analyses across all 6 parameters"""
@@ -865,6 +903,23 @@ Generate prompts in this JSON format:
             if response.get("content"):
                 product_prompts[product_name] = json.loads(response["content"])
         except:
-            product_prompts[product_name] = {"error": "Could not generate prompts"}
+            # Fallback prompts
+            product_prompts[product_name] = {
+                "image_prompts": [
+                    f"Professional product shot of {product_name} with {suggestion_set.get('color_visual_strategy', 'clean background')}",
+                    f"Lifestyle image showing {product_name} in use with {suggestion_set.get('emotional_strategy', 'positive atmosphere')}",
+                    f"Close-up detail shot highlighting key features of {product_name}"
+                ],
+                "video_prompts": [
+                    f"15-second product demonstration of {product_name} showing main benefits",
+                    f"Behind-the-scenes video of {product_name} creation process",
+                    f"Customer testimonial style video featuring {product_name}"
+                ],
+                "caption_templates": [
+                    f"Introducing {product_name}! [Product benefit]. {suggestion_set.get('cta_strategy', 'Check it out')} #product #launch",
+                    f"Why we love {product_name}: [3 key benefits]. Perfect for [target audience]. Shop now! #quality #lifestyle"
+                ],
+                "hashtag_suggestions": [f"#{product_name.lower().replace(' ', '')}", f"#{product_category.lower()}", "#quality", "#lifestyle", "#newlaunch"]
+            }
     
     return product_prompts
