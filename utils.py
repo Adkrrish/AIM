@@ -1,6 +1,6 @@
 """
 Instagram Competitor Analysis Utilities
-Enhanced with Apify API integration for reliable scraping
+Enhanced for caption scraping + manual image upload approach
 """
 
 import os
@@ -18,7 +18,15 @@ import time
 import nltk
 import jsonschema
 from groq import Groq
-from apify_client import ApifyClient
+
+# Optional Apify client import
+try:
+    from apify_client import ApifyClient
+    APIFY_AVAILABLE = True
+except ImportError:
+    print("⚠️ Apify client not available. Install with: pip install apify-client")
+    ApifyClient = None
+    APIFY_AVAILABLE = False
 
 # Download required NLTK data (run once)
 try:
@@ -30,42 +38,48 @@ except:
 
 from nltk.sentiment.vader import SentimentIntensityAnalyzer
 
-class InstagramApifyScraper:
-    """Apify-based Instagram scraper for reliable data extraction"""
+class InstagramCaptionScraper:
+    """Focused scraper for Instagram captions only via Apify"""
     
-    def __init__(self, apify_token: str):
-        if not apify_token:
-            raise ValueError("Apify token is required")
+    def __init__(self, apify_token: str = None):
+        self.apify_token = apify_token
+        self.client = None
         
-        self.client = ApifyClient(apify_token)
-        # Actor IDs for different Apify Instagram scrapers
-        self.post_scraper_id = "apify/instagram-post-scraper"  # For individual posts
-        self.profile_scraper_id = "apify/instagram-scraper"    # For profiles and posts
-        
-    def scrape_single_post(self, post_url: str) -> Dict[str, Any]:
+        if apify_token and APIFY_AVAILABLE:
+            try:
+                self.client = ApifyClient(apify_token)
+                print("✅ Apify caption scraper initialized")
+            except Exception as e:
+                print(f"❌ Failed to initialize Apify client: {e}")
+    
+    def scrape_post_caption(self, post_url: str) -> Dict[str, Any]:
         """
-        Scrape a single Instagram post using Apify Post Scraper
+        Scrape only the caption from an Instagram post
         
         Args:
             post_url: Instagram post URL
             
         Returns:
-            Dictionary containing post data
+            Dictionary containing caption data
         """
+        if not self.client:
+            return self._fallback_caption_scraping(post_url)
+        
         try:
-            print(f"🔍 Scraping {post_url} with Apify...")
+            print(f"🔍 Scraping caption from {post_url} with Apify...")
             
-            # Prepare input for Apify Instagram Post Scraper
+            # Use Apify Instagram Post Scraper for caption extraction
             run_input = {
                 "postUrls": [post_url],
                 "resultsLimit": 1,
+                "onlyPostDetails": True,  # Focus on post details only
                 "proxy": {
                     "useApifyProxy": True
                 }
             }
             
             # Run the Apify actor
-            run = self.client.actor(self.post_scraper_id).call(run_input=run_input)
+            run = self.client.actor("apify/instagram-post-scraper").call(run_input=run_input)
             
             # Get results from the dataset
             dataset_id = run["defaultDatasetId"]
@@ -73,104 +87,43 @@ class InstagramApifyScraper:
             
             # Fetch the first (and only) result
             for item in dataset.iterate_items():
-                return self._parse_apify_result(item, post_url)
+                return self._parse_apify_caption_result(item, post_url)
                 
             # If no results found
             return {
                 "url": post_url,
                 "caption": None,
-                "image_url": None,
                 "timestamp": None,
-                "errors": "No data returned from Apify scraper"
+                "hashtags": [],
+                "mentions": [],
+                "errors": "No caption data returned from Apify scraper"
             }
             
         except Exception as e:
-            print(f"❌ Apify scraping error: {str(e)}")
-            return {
-                "url": post_url,
-                "caption": None,
-                "image_url": None,
-                "timestamp": None,
-                "errors": f"Apify scraping failed: {str(e)}"
-            }
+            print(f"❌ Apify caption scraping error: {str(e)}")
+            return self._fallback_caption_scraping(post_url)
     
-    def scrape_posts_by_username(self, username: str, limit: int = 10) -> List[Dict[str, Any]]:
-        """
-        Scrape posts from a username using Apify Profile Scraper
+    def scrape_multiple_captions(self, post_urls: List[str]) -> List[Dict[str, Any]]:
+        """Scrape captions from multiple posts"""
+        results = []
         
-        Args:
-            username: Instagram username (without @)
-            limit: Number of posts to scrape
-            
-        Returns:
-            List of post dictionaries
-        """
-        try:
-            print(f"🔍 Scraping posts from @{username} with Apify...")
-            
-            # Prepare input for Apify Instagram Scraper
-            run_input = {
-                "usernames": [username],
-                "resultsType": "posts",
-                "resultsLimit": limit,
-                "proxy": {
-                    "useApifyProxy": True
-                }
-            }
-            
-            # Run the Apify actor
-            run = self.client.actor(self.profile_scraper_id).call(run_input=run_input)
-            
-            # Get results from the dataset
-            dataset_id = run["defaultDatasetId"]
-            dataset = self.client.dataset(dataset_id)
-            
-            # Fetch all results
-            results = []
-            for item in dataset.iterate_items():
-                parsed_item = self._parse_apify_result(item)
-                if parsed_item:
-                    results.append(parsed_item)
-            
-            return results
-            
-        except Exception as e:
-            print(f"❌ Apify username scraping error: {str(e)}")
-            return []
+        for url in post_urls:
+            result = self.scrape_post_caption(url)
+            results.append(result)
+        
+        return results
     
-    def _parse_apify_result(self, item: Dict, original_url: str = None) -> Dict[str, Any]:
-        """
-        Parse Apify result into standardized format
-        
-        Args:
-            item: Raw item from Apify dataset
-            original_url: Original URL if available
-            
-        Returns:
-            Standardized post data dictionary
-        """
+    def _parse_apify_caption_result(self, item: Dict, original_url: str) -> Dict[str, Any]:
+        """Parse Apify result focusing on caption data"""
         try:
-            # Extract URL
-            url = original_url or item.get('url') or item.get('shortCode')
-            if url and not url.startswith('http'):
-                url = f"https://www.instagram.com/p/{url}/"
-            
             # Extract caption
             caption = item.get('caption') or item.get('text') or item.get('description')
             
-            # Extract image URL - try multiple fields
-            image_url = (
-                item.get('displayUrl') or 
-                item.get('imageUrl') or 
-                item.get('thumbnailUrl') or
-                item.get('url') if item.get('type') == 'Image' else None
-            )
+            # Extract hashtags from caption
+            hashtags = re.findall(r'#\w+', caption) if caption else []
             
-            # Handle image arrays (for carousel posts)
-            if not image_url and item.get('images'):
-                images = item.get('images', [])
-                if images and len(images) > 0:
-                    image_url = images[0].get('url') or images[0].get('displayUrl')
+            # Extract mentions from caption
+            mentions = re.findall(r'@\w+', caption) if caption else []
             
             # Extract timestamp
             timestamp = None
@@ -178,132 +131,58 @@ class InstagramApifyScraper:
             if timestamp_field:
                 try:
                     if isinstance(timestamp_field, str):
-                        # Try parsing ISO format
                         timestamp = timestamp_field
                     elif isinstance(timestamp_field, (int, float)):
-                        # Unix timestamp
                         timestamp = datetime.fromtimestamp(timestamp_field).isoformat()
                 except:
                     timestamp = str(timestamp_field)
             
             return {
-                "url": url,
+                "url": original_url,
                 "caption": caption,
-                "image_url": image_url,
                 "timestamp": timestamp,
+                "hashtags": hashtags,
+                "mentions": mentions,
                 "errors": None,
-                "apify_data": item  # Store original data for debugging
+                "apify_data": item
             }
             
         except Exception as e:
-            print(f"❌ Error parsing Apify result: {str(e)}")
+            print(f"❌ Error parsing Apify caption result: {str(e)}")
             return {
                 "url": original_url,
                 "caption": None,
-                "image_url": None,
                 "timestamp": None,
-                "errors": f"Parsing error: {str(e)}",
-                "apify_data": item
+                "hashtags": [],
+                "mentions": [],
+                "errors": f"Parsing error: {str(e)}"
             }
-
-class InstagramAnalyzer:
-    """Enhanced Instagram analyzer with Apify integration"""
     
-    def __init__(self, groq_api_key: str, apify_token: str = None):
-        self.groq_api_key = groq_api_key
-        self.apify_token = apify_token
-        
-        # Initialize Apify scraper if token provided
-        self.apify_scraper = None
-        if apify_token:
-            try:
-                self.apify_scraper = InstagramApifyScraper(apify_token)
-                print("✅ Apify scraper initialized")
-            except Exception as e:
-                print(f"❌ Failed to initialize Apify scraper: {e}")
-        
-        # Fallback to requests session
-        self.session = requests.Session()
-        self.session.headers.update({
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36'
-        })
-        
-        # Initialize sentiment analyzer
-        try:
-            self.sentiment_analyzer = SentimentIntensityAnalyzer()
-        except:
-            self.sentiment_analyzer = None
-    
-    def fetch_instagram_post(self, url: str) -> Dict[str, Any]:
-        """
-        Fetch Instagram post data using Apify (primary) or fallback methods
-        
-        Args:
-            url: Instagram post URL
-            
-        Returns:
-            Dictionary containing post data and metadata
-        """
-        # Try Apify first if available
-        if self.apify_scraper:
-            print("🚀 Using Apify scraper...")
-            try:
-                result = self.apify_scraper.scrape_single_post(url)
-                if result and not result.get("errors"):
-                    print("✅ Apify scraping successful")
-                    return result
-                else:
-                    print(f"⚠️ Apify failed: {result.get('errors', 'Unknown error')}")
-            except Exception as e:
-                print(f"❌ Apify exception: {str(e)}")
-        
-        # Fallback to traditional scraping methods
-        print("🔄 Falling back to traditional scraping...")
-        return self._fallback_scraping(url)
-    
-    def _fallback_scraping(self, url: str) -> Dict[str, Any]:
-        """Fallback scraping method using requests"""
+    def _fallback_caption_scraping(self, url: str) -> Dict[str, Any]:
+        """Fallback method for caption scraping using requests"""
         try:
             headers = {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-                'Accept-Language': 'en-US,en;q=0.5',
-                'Accept-Encoding': 'gzip, deflate, br',
-                'Connection': 'keep-alive',
-                'Upgrade-Insecure-Requests': '1',
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
             }
             
-            response = self.session.get(url, headers=headers, timeout=15)
+            response = requests.get(url, headers=headers, timeout=15)
             response.raise_for_status()
             
-            return self._parse_html_content(response.text, url)
+            html_content = response.text
             
-        except Exception as e:
-            return {
-                "url": url,
-                "caption": None,
-                "image_url": None,
-                "timestamp": None,
-                "errors": f"Fallback scraping failed: {str(e)}"
-            }
-    
-    def _parse_html_content(self, html_content: str, url: str) -> Dict[str, Any]:
-        """Parse HTML content for Instagram post data"""
-        try:
-            # Extract caption using multiple patterns
-            caption = self._extract_caption_safe(html_content)
+            # Extract caption using regex patterns
+            caption = self._extract_caption_from_html(html_content)
             
-            # Extract image URL using multiple patterns
-            image_url = self._extract_image_url_safe(html_content)
-            
-            # Extract timestamp
-            timestamp = self._extract_timestamp_safe(html_content)
+            # Extract hashtags and mentions
+            hashtags = re.findall(r'#\w+', caption) if caption else []
+            mentions = re.findall(r'@\w+', caption) if caption else []
             
             return {
                 "url": url,
                 "caption": caption,
-                "image_url": image_url,
-                "timestamp": timestamp,
+                "timestamp": None,
+                "hashtags": hashtags,
+                "mentions": mentions,
                 "errors": None
             }
             
@@ -311,22 +190,19 @@ class InstagramAnalyzer:
             return {
                 "url": url,
                 "caption": None,
-                "image_url": None,
                 "timestamp": None,
-                "errors": f"HTML parsing error: {str(e)}"
+                "hashtags": [],
+                "mentions": [],
+                "errors": f"Fallback scraping failed: {str(e)}"
             }
     
-    def _extract_caption_safe(self, html: str) -> Optional[str]:
-        """Safely extract caption from HTML"""
-        if not html:
-            return None
-            
+    def _extract_caption_from_html(self, html: str) -> Optional[str]:
+        """Extract caption from HTML using regex"""
         patterns = [
             r'"caption":"([^"]*)"',
             r'<meta property="og:description" content="([^"]*)"',
             r'"accessibility_caption":"([^"]*)"',
             r'"edge_media_to_caption":\s*{"edges":\s*\[{"node":\s*{"text":\s*"([^"]*)"',
-            r'<meta name="description" content="([^"]*)"',
         ]
         
         for pattern in patterns:
@@ -344,109 +220,163 @@ class InstagramAnalyzer:
                 continue
         
         return None
+
+class CombinedAnalyzer:
+    """Analyzer that combines caption and image analysis"""
     
-    def _extract_image_url_safe(self, html: str) -> Optional[str]:
-        """Safely extract image URL from HTML"""
-        if not html:
-            return None
-            
-        patterns = [
-            r'"display_url":"([^"]*)"',
-            r'<meta property="og:image" content="([^"]*)"',
-            r'"thumbnail_src":"([^"]*)"',
-            r'"src":"([^"]*\.jpg[^"]*)"',
-        ]
+    def __init__(self, groq_api_key: str):
+        self.groq_api_key = groq_api_key
         
-        for pattern in patterns:
-            try:
-                matches = re.findall(pattern, html)
-                for match in matches:
-                    url = match if isinstance(match, str) else match[0] if match else ""
-                    
-                    if url:
-                        try:
-                            url = url.encode('utf-8').decode('unicode_escape')
-                        except:
-                            pass
-                        
-                        if url.startswith('http') and any(domain in url for domain in ['instagram', 'cdninstagram', 'fbcdn']):
-                            return url
-            except:
-                continue
-        
-        return None
-    
-    def _extract_timestamp_safe(self, html: str) -> Optional[str]:
-        """Safely extract timestamp from HTML"""
-        if not html:
-            return None
-            
-        patterns = [
-            r'"taken_at_timestamp":(\d+)',
-            r'"date":"([^"]*)"',
-            r'"taken_at":(\d+)',
-            r'datetime="([^"]*)"',
-        ]
-        
-        for pattern in patterns:
-            try:
-                match = re.search(pattern, html)
-                if match:
-                    if pattern.endswith('(\\d+)'):
-                        timestamp = int(match.group(1))
-                        return datetime.fromtimestamp(timestamp).isoformat()
-                    else:
-                        return match.group(1)
-            except:
-                continue
-        
-        return None
-    
-    def download_image(self, url: str) -> Optional[bytes]:
-        """Download image from URL with better error handling"""
-        if not url:
-            return None
-            
+        # Initialize sentiment analyzer
         try:
-            headers = {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-                'Referer': 'https://www.instagram.com/',
-                'Accept': 'image/webp,image/apng,image/*,*/*;q=0.8'
+            self.sentiment_analyzer = SentimentIntensityAnalyzer()
+        except:
+            self.sentiment_analyzer = None
+    
+    def analyze_caption_theme(self, caption: str) -> Dict[str, Any]:
+        """Analyze caption for themes using LLM"""
+        if not caption or not self.groq_api_key:
+            return {
+                "themes": ["general"],
+                "sentiment": "neutral",
+                "tone": "neutral",
+                "content_type": "unknown",
+                "brand_alignment": "unknown"
+            }
+        
+        # Use LLM for thematic analysis
+        theme_prompt = f"""Analyze this Instagram caption for themes and content strategy:
+
+Caption: "{caption}"
+
+Provide analysis in JSON format:
+{{
+    "themes": ["theme1", "theme2"],
+    "sentiment": "positive|negative|neutral",
+    "tone": "professional|casual|playful|inspiring|promotional",
+    "content_type": "educational|promotional|lifestyle|behind_scenes|user_generated",
+    "brand_alignment": "strong|medium|weak",
+    "target_audience": "millennials|gen_z|professionals|general",
+    "engagement_potential": "high|medium|low",
+    "content_pillars": ["pillar1", "pillar2"]
+}}"""
+        
+        try:
+            response = call_groq_model(
+                prompt=theme_prompt,
+                system="You are an expert social media strategist analyzing Instagram content for themes and brand alignment.",
+                groq_api_key=self.groq_api_key
+            )
+            
+            if response.get("content"):
+                result = json.loads(response["content"])
+                return result
+        except:
+            pass
+        
+        # Fallback to rule-based analysis
+        return self._fallback_caption_analysis(caption)
+    
+    def _fallback_caption_analysis(self, caption: str) -> Dict[str, Any]:
+        """Fallback caption analysis using rules"""
+        themes = []
+        
+        # Theme detection keywords
+        theme_keywords = {
+            "lifestyle": ["life", "daily", "routine", "home", "family"],
+            "fashion": ["outfit", "style", "fashion", "wear", "look"],
+            "food": ["food", "recipe", "eat", "delicious", "taste", "cook"],
+            "travel": ["travel", "trip", "vacation", "explore", "adventure"],
+            "fitness": ["workout", "fitness", "gym", "health", "exercise"],
+            "nature": ["nature", "outdoor", "sunset", "landscape", "beach"],
+            "business": ["business", "work", "professional", "career", "success"]
+        }
+        
+        caption_lower = caption.lower()
+        for theme, keywords in theme_keywords.items():
+            if any(keyword in caption_lower for keyword in keywords):
+                themes.append(theme)
+        
+        if not themes:
+            themes = ["general"]
+        
+        # Sentiment analysis
+        sentiment = "neutral"
+        if self.sentiment_analyzer:
+            scores = self.sentiment_analyzer.polarity_scores(caption)
+            if scores['pos'] > 0.5:
+                sentiment = "positive"
+            elif scores['neg'] > 0.5:
+                sentiment = "negative"
+        
+        return {
+            "themes": themes[:3],  # Top 3 themes
+            "sentiment": sentiment,
+            "tone": "casual",
+            "content_type": "lifestyle",
+            "brand_alignment": "medium",
+            "target_audience": "general",
+            "engagement_potential": "medium",
+            "content_pillars": themes[:2]
+        }
+    
+    def analyze_image_properties(self, image: Image.Image) -> Dict[str, Any]:
+        """Analyze uploaded image for visual properties"""
+        try:
+            # Convert to numpy array
+            img_array = np.array(image)
+            
+            # Color analysis
+            colors = self._extract_dominant_colors(image)
+            
+            # Brightness analysis
+            mean_rgb = np.mean(img_array, axis=(0, 1))
+            brightness = np.mean(mean_rgb)
+            
+            # Color temperature analysis
+            r, g, b = mean_rgb
+            color_temperature = "warm" if r > b else "cool"
+            
+            # Visual style analysis
+            visual_style = self._analyze_visual_style(img_array, brightness)
+            
+            # Emotional tone from colors
+            emotional_tone = self._derive_emotional_tone(colors, brightness)
+            
+            return {
+                "dominant_colors": colors,
+                "brightness_level": int(brightness),
+                "color_temperature": color_temperature,
+                "visual_style": visual_style,
+                "emotional_tone": emotional_tone,
+                "composition_type": "unknown",  # Would need more sophisticated analysis
+                "brand_consistency": "medium"
             }
             
-            response = self.session.get(url, headers=headers, timeout=20)
-            response.raise_for_status()
-            
-            print(f"Downloaded image: {len(response.content)} bytes")
-            return response.content
         except Exception as e:
-            print(f"Error downloading image: {e}")
-            return None
+            print(f"Error analyzing image: {e}")
+            return {
+                "dominant_colors": ["#000000"],
+                "brightness_level": 128,
+                "color_temperature": "neutral",
+                "visual_style": "unknown",
+                "emotional_tone": "neutral",
+                "composition_type": "unknown",
+                "brand_consistency": "unknown"
+            }
     
-    def image_to_pil(self, image_bytes: bytes) -> Optional[Image.Image]:
-        """Convert image bytes to PIL Image"""
-        if not image_bytes:
-            return None
-            
-        try:
-            from io import BytesIO
-            image = Image.open(BytesIO(image_bytes)).convert('RGB')
-            print(f"Converted to PIL image: {image.size}")
-            return image
-        except Exception as e:
-            print(f"Error converting to PIL: {e}")
-            return None
-    
-    def extract_colors(self, image: Image.Image, n_colors: int = 5) -> List[str]:
+    def _extract_dominant_colors(self, image: Image.Image, n_colors: int = 5) -> List[str]:
         """Extract dominant colors using K-means clustering"""
         try:
+            # Resize for faster processing
             image = image.resize((150, 150))
-            data = np.array(image)
-            data = data.reshape((-1, 3))
+            data = np.array(image).reshape((-1, 3))
             
+            # Apply K-means
             kmeans = KMeans(n_clusters=n_colors, random_state=42, n_init=10)
             kmeans.fit(data)
             
+            # Convert to hex colors
             colors = []
             for color in kmeans.cluster_centers_:
                 hex_color = '#{:02x}{:02x}{:02x}'.format(
@@ -454,153 +384,183 @@ class InstagramAnalyzer:
                 )
                 colors.append(hex_color)
             
-            print(f"Extracted colors: {colors}")
             return colors
             
         except Exception as e:
             print(f"Error extracting colors: {e}")
             return ['#000000']
     
-    def analyze_caption_rules(self, caption: str) -> Dict[str, Any]:
-        """Analyze caption using rule-based methods"""
-        if not caption:
-            return {
-                "hashtags": [],
-                "top_keywords": [],
-                "word_count": 0,
-                "cta_detected": False,
-                "cta_text": None,
-                "readability_score": 0
-            }
-        
-        # Extract hashtags
-        hashtags = re.findall(r'#\w+', caption)
-        
-        # Extract keywords
-        words = re.findall(r'\b\w+\b', caption.lower())
-        stop_words = {'the', 'a', 'an', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for', 'of', 'with', 'by', 'is', 'are', 'was', 'were', 'be', 'been', 'being', 'have', 'has', 'had', 'do', 'does', 'did', 'will', 'would', 'could', 'should', 'may', 'might', 'must', 'can', 'this', 'that', 'these', 'those', 'i', 'you', 'he', 'she', 'it', 'we', 'they', 'me', 'him', 'her', 'us', 'them'}
-        keywords = [word for word in words if word not in stop_words and len(word) > 3]
-        
-        from collections import Counter
-        word_counts = Counter(keywords)
-        top_keywords = [word for word, count in word_counts.most_common(5)]
-        
-        # Detect CTA
-        cta_patterns = [
-            r'\b(click|swipe|tap|visit|shop|buy|order|book|subscribe|follow|like|share|comment|dm|message)\b',
-            r'\b(link in bio|dm us|contact us|call now|order now|swipe up|learn more|get yours|check out)\b'
-        ]
-        
-        cta_detected = False
-        cta_text = None
-        for pattern in cta_patterns:
-            match = re.search(pattern, caption.lower())
-            if match:
-                cta_detected = True
-                cta_text = match.group(0)
-                break
-        
-        # Simple readability score
-        sentences = [s.strip() for s in caption.split('.') if s.strip()]
-        avg_sentence_length = sum(len(s.split()) for s in sentences) / max(len(sentences), 1)
-        readability_score = max(0, 100 - (avg_sentence_length * 2))
-        
-        return {
-            "hashtags": hashtags,
-            "top_keywords": top_keywords,
-            "word_count": len(words),
-            "cta_detected": cta_detected,
-            "cta_text": cta_text,
-            "readability_score": int(readability_score)
-        }
+    def _analyze_visual_style(self, img_array: np.ndarray, brightness: float) -> str:
+        """Analyze visual style based on image properties"""
+        if brightness > 200:
+            return "bright_airy"
+        elif brightness < 50:
+            return "dark_moody"
+        elif brightness > 150:
+            return "clean_modern"
+        else:
+            return "balanced_natural"
     
-    def compute_readability(self, caption: str) -> Dict[str, Any]:
-        """Compute detailed readability metrics"""
-        if not caption:
-            return {
-                "word_count": 0,
-                "sentence_count": 0,
-                "avg_sentence_length": 0,
-                "skimmable": False,
-                "score": 0,
-                "evidence": "No caption provided"
-            }
+    def _derive_emotional_tone(self, colors: List[str], brightness: float) -> str:
+        """Derive emotional tone from colors and brightness"""
+        # Simple color psychology mapping
+        warm_colors = 0
+        cool_colors = 0
         
-        sentences = [s.strip() for s in caption.split('.') if s.strip()]
-        words = caption.split()
+        for color in colors[:3]:  # Check top 3 colors
+            try:
+                # Convert hex to RGB
+                hex_color = color.lstrip('#')
+                r, g, b = tuple(int(hex_color[i:i+2], 16) for i in (0, 2, 4))
+                
+                if r > b:  # More red than blue = warmer
+                    warm_colors += 1
+                else:
+                    cool_colors += 1
+            except:
+                continue
         
-        word_count = len(words)
-        sentence_count = len(sentences)
-        avg_sentence_length = word_count / max(sentence_count, 1)
-        
-        skimmable = avg_sentence_length <= 15 and word_count <= 100
-        
-        score = 100
-        if avg_sentence_length > 20:
-            score -= 30
-        if word_count > 150:
-            score -= 20
-        if sentence_count < 2:
-            score -= 10
-        
-        score = max(0, score)
-        evidence = f"Average sentence length: {avg_sentence_length:.1f} words"
-        
-        return {
-            "word_count": word_count,
-            "sentence_count": sentence_count,
-            "avg_sentence_length": round(avg_sentence_length, 1),
-            "skimmable": skimmable,
-            "score": score,
-            "evidence": evidence
-        }
-    
-    def analyze_visual_emotions(self, image: Image.Image) -> Dict[str, Any]:
-        """Analyze visual emotions using simple heuristics"""
-        try:
-            img_array = np.array(image)
-            mean_rgb = np.mean(img_array, axis=(0, 1))
-            brightness = np.mean(mean_rgb)
-            
-            emotions = []
-            
-            if brightness > 180:
-                emotions.extend(["bright", "energetic"])
-            elif brightness < 80:
-                emotions.extend(["moody", "dramatic"])
+        if brightness > 180:
+            if warm_colors > cool_colors:
+                return "energetic_positive"
             else:
-                emotions.append("balanced")
-            
-            r, g, b = mean_rgb
-            if r > g and r > b:
-                emotions.append("warm")
-            elif b > r and b > g:
-                emotions.append("cool")
-            elif g > r and g > b:
-                emotions.append("natural")
-            
-            if not emotions:
-                emotions = ["neutral"]
-            
-            result = {
-                "visual_emotions": emotions[:3],
-                "brightness": int(brightness),
-                "score": min(100, int(brightness * 0.5 + 25))
-            }
-            
-            print(f"Visual emotions analyzed: {result}")
-            return result
-            
-        except Exception as e:
-            print(f"Error in visual emotion analysis: {e}")
-            return {
-                "visual_emotions": ["neutral"],
-                "brightness": 128,
-                "score": 50
-            }
+                return "calm_serene"
+        elif brightness < 80:
+            if warm_colors > cool_colors:
+                return "intimate_cozy"
+            else:
+                return "mysterious_dramatic"
+        else:
+            return "balanced_natural"
+    
+    def combine_analysis(self, caption_analysis: Dict, image_analysis: Dict, 
+                        caption: str, competitor_name: str) -> Dict[str, Any]:
+        """Combine caption and image analysis for comprehensive insights"""
+        
+        # Alignment analysis
+        alignment_score = self._calculate_alignment_score(caption_analysis, image_analysis)
+        
+        # Brand consistency analysis
+        brand_consistency = self._analyze_brand_consistency(caption_analysis, image_analysis)
+        
+        # Content strategy insights
+        strategy_insights = self._generate_strategy_insights(caption_analysis, image_analysis)
+        
+        # Recommendations
+        recommendations = self._generate_recommendations(caption_analysis, image_analysis, alignment_score)
+        
+        return {
+            "competitor_name": competitor_name,
+            "caption_analysis": caption_analysis,
+            "image_analysis": image_analysis,
+            "alignment_score": alignment_score,
+            "brand_consistency": brand_consistency,
+            "strategy_insights": strategy_insights,
+            "recommendations": recommendations,
+            "overall_score": self._calculate_overall_score(caption_analysis, image_analysis, alignment_score)
+        }
+    
+    def _calculate_alignment_score(self, caption_analysis: Dict, image_analysis: Dict) -> int:
+        """Calculate alignment between caption and image"""
+        score = 50  # Base score
+        
+        # Sentiment and emotional tone alignment
+        caption_sentiment = caption_analysis.get("sentiment", "neutral")
+        image_tone = image_analysis.get("emotional_tone", "neutral")
+        
+        if caption_sentiment == "positive" and "positive" in image_tone:
+            score += 20
+        elif caption_sentiment == "negative" and "dark" in image_tone:
+            score += 15
+        
+        # Theme and visual style alignment
+        themes = caption_analysis.get("themes", [])
+        visual_style = image_analysis.get("visual_style", "")
+        
+        if "lifestyle" in themes and "clean" in visual_style:
+            score += 15
+        elif "nature" in themes and "natural" in visual_style:
+            score += 15
+        
+        return min(100, max(0, score))
+    
+    def _analyze_brand_consistency(self, caption_analysis: Dict, image_analysis: Dict) -> str:
+        """Analyze overall brand consistency"""
+        caption_tone = caption_analysis.get("tone", "neutral")
+        image_style = image_analysis.get("visual_style", "unknown")
+        
+        if caption_tone == "professional" and "clean" in image_style:
+            return "high"
+        elif caption_tone == "casual" and "natural" in image_style:
+            return "high"
+        else:
+            return "medium"
+    
+    def _generate_strategy_insights(self, caption_analysis: Dict, image_analysis: Dict) -> List[str]:
+        """Generate strategic insights"""
+        insights = []
+        
+        # Content type insights
+        content_type = caption_analysis.get("content_type", "unknown")
+        if content_type == "educational":
+            insights.append("Educational content strategy - focus on value-driven messaging")
+        elif content_type == "lifestyle":
+            insights.append("Lifestyle content strategy - emphasize authenticity and relatability")
+        
+        # Visual insights
+        visual_style = image_analysis.get("visual_style", "unknown")
+        if "bright" in visual_style:
+            insights.append("Bright, optimistic visual approach appeals to positive engagement")
+        elif "dark" in visual_style:
+            insights.append("Moody aesthetic creates emotional depth and sophistication")
+        
+        # Engagement potential
+        engagement = caption_analysis.get("engagement_potential", "medium")
+        if engagement == "high":
+            insights.append("High engagement potential - strong call-to-action and relatable content")
+        
+        return insights[:3]  # Return top 3 insights
+    
+    def _generate_recommendations(self, caption_analysis: Dict, image_analysis: Dict, alignment_score: int) -> List[str]:
+        """Generate actionable recommendations"""
+        recommendations = []
+        
+        if alignment_score < 70:
+            recommendations.append("Improve alignment between caption tone and visual mood")
+        
+        # Caption recommendations
+        if caption_analysis.get("engagement_potential") == "low":
+            recommendations.append("Add more engaging CTAs and interactive elements to captions")
+        
+        # Visual recommendations
+        brightness = image_analysis.get("brightness_level", 128)
+        if brightness < 100:
+            recommendations.append("Consider brighter, more vibrant visuals for better engagement")
+        
+        # Theme consistency
+        themes = caption_analysis.get("themes", [])
+        if len(themes) > 2:
+            recommendations.append("Focus on 1-2 core themes per post for clearer messaging")
+        
+        return recommendations[:4]  # Return top 4 recommendations
+    
+    def _calculate_overall_score(self, caption_analysis: Dict, image_analysis: Dict, alignment_score: int) -> int:
+        """Calculate overall content quality score"""
+        # Weighted scoring
+        caption_score = 70 if caption_analysis.get("engagement_potential") == "high" else 50
+        image_score = 70 if image_analysis.get("emotional_tone") != "neutral" else 50
+        
+        # Calculate weighted average
+        overall_score = int(
+            (caption_score * 0.4) + 
+            (image_score * 0.3) + 
+            (alignment_score * 0.3)
+        )
+        
+        return min(100, max(0, overall_score))
 
 def call_groq_model(prompt: str, system: str = None, max_tokens: int = 2048, groq_api_key: str = None) -> Dict[str, Any]:
-    """Call Groq API for LLM analysis using the official Groq client"""
+    """Call Groq API for LLM analysis"""
     if not groq_api_key:
         return {"error": "GROQ API key not provided", "content": None}
     
@@ -624,241 +584,21 @@ def call_groq_model(prompt: str, system: str = None, max_tokens: int = 2048, gro
         )
         
         content = completion.choices[0].message.content
-        
-        return {
-            "content": content,
-            "usage": {
-                "prompt_tokens": completion.usage.prompt_tokens if hasattr(completion, 'usage') and completion.usage else 0,
-                "completion_tokens": completion.usage.completion_tokens if hasattr(completion, 'usage') and completion.usage else 0,
-                "total_tokens": completion.usage.total_tokens if hasattr(completion, 'usage') and completion.usage else 0
-            },
-            "error": None
-        }
+        return {"content": content, "error": None}
         
     except Exception as e:
         print(f"Error calling Groq API: {e}")
         return {"error": str(e), "content": None}
 
-# Keep all the JSON schemas and prompt templates from the previous version
-POST_SCHEMA = {
-    "type": "object",
-    "properties": {
-        "competitor_name": {"type": "string"},
-        "instagram_id": {"type": "string"},
-        "post_url": {"type": "string"},
-        "timestamp": {"type": ["string", "null"]},
-        "caption_text": {"type": ["string", "null"]},
-        "image_url": {"type": ["string", "null"]},
-        "image_hash": {"type": "string"},
-        "analysis": {
-            "type": "object",
-            "properties": {
-                "color_palette": {
-                    "type": "object",
-                    "properties": {
-                        "dominant_hex": {"type": "array", "items": {"type": "string"}},
-                        "tone": {"type": "string"},
-                        "style": {"type": "string"},
-                        "raw_score": {"type": "integer"},
-                        "evidence": {"type": "string"}
-                    }
-                },
-                "tone_of_voice": {
-                    "type": "object",
-                    "properties": {
-                        "label": {"type": "string"},
-                        "polarity": {"type": "string"},
-                        "intensity": {"type": "integer"},
-                        "evidence": {"type": "array", "items": {"type": "string"}},
-                        "raw_score": {"type": "integer"}
-                    }
-                },
-                "cta": {
-                    "type": "object",
-                    "properties": {
-                        "presence": {"type": "string"},
-                        "text": {"type": ["string", "null"]},
-                        "strength": {"type": "string"},
-                        "score": {"type": "integer"}
-                    }
-                },
-                "hashtags_keywords": {
-                    "type": "object",
-                    "properties": {
-                        "hashtags": {"type": "array", "items": {"type": "string"}},
-                        "top_keywords": {"type": "array", "items": {"type": "string"}},
-                        "recommendation": {"type": "string"}
-                    }
-                },
-                "readability": {
-                    "type": "object",
-                    "properties": {
-                        "word_count": {"type": "integer"},
-                        "skimmable": {"type": "boolean"},
-                        "score": {"type": "integer"},
-                        "evidence": {"type": "string"}
-                    }
-                },
-                "emotional_imagery": {
-                    "type": "object",
-                    "properties": {
-                        "visual_emotions": {"type": "array", "items": {"type": "string"}},
-                        "text_emotion": {"type": "string"},
-                        "alignment_score": {"type": "integer"},
-                        "score": {"type": "integer"}
-                    }
-                }
-            }
-        },
-        "errors": {"type": ["string", "null"]}
-    }
-}
+# Keep existing prompt templates for compatibility
+ANALYSIS_SYSTEM_PROMPT = """You are an expert social media analyst specializing in Instagram content analysis."""
 
-def validate_post_data(post_data: Dict) -> bool:
-    """Validate post data against schema"""
-    try:
-        jsonschema.validate(post_data, POST_SCHEMA)
-        return True
-    except jsonschema.ValidationError as e:
-        print(f"Validation error: {e}")
-        return False
+ANALYSIS_USER_PROMPT = """Analyze this Instagram post data and provide strategic insights."""
 
-# LLM Prompt Templates (same as before)
-ANALYSIS_SYSTEM_PROMPT = """You are an expert social media analyst specializing in Instagram content analysis. 
-Analyze the provided Instagram post data and return a structured JSON response following the exact schema provided.
-Focus on actionable insights for competitive analysis and campaign planning.
-Be precise and provide specific evidence for your assessments."""
+SUGGESTION_SYSTEM_PROMPT = """You are a strategic social media consultant creating competitive analysis reports."""
 
-ANALYSIS_USER_PROMPT = """Analyze this Instagram post data:
+SUGGESTION_USER_PROMPT = """Based on competitor analysis data, generate strategic recommendations."""
 
-Caption: "{caption}"
-Visual Description: {visual_description}
-Colors: {colors}
+CAMPAIGN_PROMPT_SYSTEM = """You are a creative campaign prompt generator for social media marketing."""
 
-Return a JSON object with this exact structure:
-{{
-    "tone_of_voice": {{
-        "label": "professional|casual|playful|inspiring|authoritative",
-        "polarity": "positive|negative|neutral", 
-        "intensity": 1-10,
-        "evidence": ["specific phrase 1", "specific phrase 2"],
-        "raw_score": 1-100
-    }},
-    "cta": {{
-        "presence": "strong|weak|none",
-        "text": "exact CTA text or null",
-        "strength": "direct|subtle|implied|none",
-        "score": 1-100
-    }},
-    "hashtags_keywords": {{
-        "hashtags": ["#tag1", "#tag2"],
-        "top_keywords": ["keyword1", "keyword2"],
-        "recommendation": "specific recommendation text"
-    }},
-    "emotional_imagery": {{
-        "visual_emotions": ["emotion1", "emotion2", "emotion3"],
-        "text_emotion": "dominant emotion from caption",
-        "alignment_score": 1-100,
-        "score": 1-100
-    }},
-    "color_palette": {{
-        "tone": "warm|cool|neutral|vibrant|muted",
-        "style": "minimalist|bold|elegant|playful|corporate",
-        "raw_score": 1-100,
-        "evidence": "specific color analysis"
-    }}
-}}"""
-
-SUGGESTION_SYSTEM_PROMPT = """You are a strategic social media consultant creating competitive analysis reports.
-Generate three distinct strategy recommendations (A, B, C) based on competitor analysis data.
-Each strategy should have 6 actionable recommendations covering: color palette, tone of voice, CTA approach, hashtag strategy, readability optimization, and emotional appeal."""
-
-SUGGESTION_USER_PROMPT = """Based on this competitor analysis data:
-
-{competitor_data}
-
-Generate 3 strategic recommendations as JSON:
-{{
-    "strategies": {{
-        "strategy_a": {{
-            "name": "Strategy Name",
-            "description": "Brief strategy description",
-            "recommendations": [
-                {{"parameter": "color_palette", "action": "specific action", "rationale": "why this works", "kpi": "measurable outcome"}},
-                {{"parameter": "tone_of_voice", "action": "specific action", "rationale": "why this works", "kpi": "measurable outcome"}},
-                {{"parameter": "cta", "action": "specific action", "rationale": "why this works", "kpi": "measurable outcome"}},
-                {{"parameter": "hashtags", "action": "specific action", "rationale": "why this works", "kpi": "measurable outcome"}},
-                {{"parameter": "readability", "action": "specific action", "rationale": "why this works", "kpi": "measurable outcome"}},
-                {{"parameter": "emotional_appeal", "action": "specific action", "rationale": "why this works", "kpi": "measurable outcome"}}
-            ],
-            "confidence_score": 1-100
-        }},
-        "strategy_b": {{
-            "name": "Strategy Name",
-            "description": "Brief strategy description",
-            "recommendations": [
-                {{"parameter": "color_palette", "action": "specific action", "rationale": "why this works", "kpi": "measurable outcome"}},
-                {{"parameter": "tone_of_voice", "action": "specific action", "rationale": "why this works", "kpi": "measurable outcome"}},
-                {{"parameter": "cta", "action": "specific action", "rationale": "why this works", "kpi": "measurable outcome"}},
-                {{"parameter": "hashtags", "action": "specific action", "rationale": "why this works", "kpi": "measurable outcome"}},
-                {{"parameter": "readability", "action": "specific action", "rationale": "why this works", "kpi": "measurable outcome"}},
-                {{"parameter": "emotional_appeal", "action": "specific action", "rationale": "why this works", "kpi": "measurable outcome"}}
-            ],
-            "confidence_score": 1-100
-        }},
-        "strategy_c": {{
-            "name": "Strategy Name", 
-            "description": "Brief strategy description",
-            "recommendations": [
-                {{"parameter": "color_palette", "action": "specific action", "rationale": "why this works", "kpi": "measurable outcome"}},
-                {{"parameter": "tone_of_voice", "action": "specific action", "rationale": "why this works", "kpi": "measurable outcome"}},
-                {{"parameter": "cta", "action": "specific action", "rationale": "why this works", "kpi": "measurable outcome"}},
-                {{"parameter": "hashtags", "action": "specific action", "rationale": "why this works", "kpi": "measurable outcome"}},
-                {{"parameter": "readability", "action": "specific action", "rationale": "why this works", "kpi": "measurable outcome"}},
-                {{"parameter": "emotional_appeal", "action": "specific action", "rationale": "why this works", "kpi": "measurable outcome"}}
-            ],
-            "confidence_score": 1-100
-        }}
-    }}
-}}"""
-
-CAMPAIGN_PROMPT_SYSTEM = """You are a creative campaign prompt generator for social media marketing.
-Generate specific, actionable prompts for image generation, video creation, hashtags, captions, and model-ready prompts.
-Focus on brand alignment and competitor differentiation."""
-
-CAMPAIGN_PROMPT_USER = """Generate 3 campaign prompt sets for this strategy:
-
-Strategy: {strategy_name}
-Key Actions: {key_actions}
-Brand Colors: {colors}
-Brand Context: {brand_context}
-
-Return JSON with 3 campaign sets:
-{{
-    "campaign_sets": [
-        {{
-            "name": "Campaign Set 1",
-            "image_prompt": "Detailed image generation prompt",
-            "video_prompt": "Detailed short video prompt", 
-            "hashtags": ["#tag1", "#tag2", "#tag3"],
-            "caption_starter": "Engaging caption opening...",
-            "model_ready_prompt": "Concise prompt for AI tools"
-        }},
-        {{
-            "name": "Campaign Set 2",
-            "image_prompt": "Detailed image generation prompt",
-            "video_prompt": "Detailed short video prompt",
-            "hashtags": ["#tag1", "#tag2", "#tag3"],
-            "caption_starter": "Engaging caption opening...",
-            "model_ready_prompt": "Concise prompt for AI tools"
-        }},
-        {{
-            "name": "Campaign Set 3",
-            "image_prompt": "Detailed image generation prompt",
-            "video_prompt": "Detailed short video prompt",
-            "hashtags": ["#tag1", "#tag2", "#tag3"],
-            "caption_starter": "Engaging caption opening...",
-            "model_ready_prompt": "Concise prompt for AI tools"
-        }}
-    ]
-}}"""
+CAMPAIGN_PROMPT_USER = """Generate campaign prompts based on strategic recommendations."""
