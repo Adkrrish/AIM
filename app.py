@@ -63,6 +63,14 @@ st.markdown("""
     border-radius: 8px;
     margin: 1rem 0;
 }
+.debug-info {
+    background: #e8f4fd;
+    border: 1px solid #bee5eb;
+    padding: 0.5rem;
+    border-radius: 4px;
+    margin: 0.5rem 0;
+    font-size: 0.9rem;
+}
 </style>
 """, unsafe_allow_html=True)
 
@@ -123,12 +131,21 @@ def render_color_palette(colors: List[str]) -> str:
 
 def analyze_single_post(analyzer: InstagramAnalyzer, competitor_name: str, 
                        instagram_id: str, post_url: str, groq_api_key: str) -> Dict[str, Any]:
-    """Analyze a single Instagram post"""
+    """Analyze a single Instagram post with robust error handling"""
+    
+    # Create status container for this post
+    status_container = st.empty()
+    
+    with status_container.container():
+        st.markdown(f'<div class="debug-info">🔍 Analyzing: {post_url}</div>', unsafe_allow_html=True)
     
     # Fetch post data
     post_data = analyzer.fetch_instagram_post(post_url)
     
     if post_data["errors"]:
+        with status_container.container():
+            st.markdown(f'<div class="debug-info">❌ Fetch failed: {post_data["errors"]}</div>', unsafe_allow_html=True)
+        
         return {
             "competitor_name": competitor_name,
             "instagram_id": instagram_id, 
@@ -137,30 +154,61 @@ def analyze_single_post(analyzer: InstagramAnalyzer, competitor_name: str,
             "analysis": {}
         }
     
-    # Download and analyze image
-    image_analysis = {}
-    visual_description = "No image available"
+    # Initialize ALL variables with default values at the start
+    visual_emotions = {"visual_emotions": ["neutral"], "brightness": 128, "score": 50}
     colors = ["#000000"]
+    visual_description = "No image available"
+    image_analysis_success = False
     
-    if post_data["image_url"]:
+    # Try to download and analyze image
+    if post_data.get("image_url"):
+        with status_container.container():
+            st.markdown(f'<div class="debug-info">🖼️ Found image URL: {post_data["image_url"][:50]}...</div>', unsafe_allow_html=True)
+        
         image_bytes = analyzer.download_image(post_data["image_url"])
         if image_bytes:
             image = analyzer.image_to_pil(image_bytes)
             if image:
-                colors = analyzer.extract_colors(image)
-                visual_emotions = analyzer.analyze_visual_emotions(image)
-                visual_description = f"Image with dominant colors: {', '.join(colors[:3])}"
+                try:
+                    colors = analyzer.extract_colors(image)
+                    visual_emotions = analyzer.analyze_visual_emotions(image)
+                    visual_description = f"Image with dominant colors: {', '.join(colors[:3])}"
+                    image_analysis_success = True
+                    
+                    with status_container.container():
+                        st.markdown(f'<div class="debug-info">✅ Image analysis successful - Colors: {", ".join(colors[:3])}</div>', unsafe_allow_html=True)
+                        
+                except Exception as e:
+                    with status_container.container():
+                        st.markdown(f'<div class="debug-info">⚠️ Image processing failed: {str(e)}</div>', unsafe_allow_html=True)
+            else:
+                with status_container.container():
+                    st.markdown(f'<div class="debug-info">⚠️ Failed to convert image to PIL format</div>', unsafe_allow_html=True)
+        else:
+            with status_container.container():
+                st.markdown(f'<div class="debug-info">⚠️ Failed to download image</div>', unsafe_allow_html=True)
+    else:
+        with status_container.container():
+            st.markdown(f'<div class="debug-info">⚠️ No image URL found in post data</div>', unsafe_allow_html=True)
     
     # Analyze caption using rules
-    caption_analysis = analyzer.analyze_caption_rules(post_data["caption"] or "")
-    readability = analyzer.compute_readability(post_data["caption"] or "")
+    caption_analysis = analyzer.analyze_caption_rules(post_data.get("caption") or "")
+    readability = analyzer.compute_readability(post_data.get("caption") or "")
+    
+    # Show caption analysis results
+    if post_data.get("caption"):
+        with status_container.container():
+            st.markdown(f'<div class="debug-info">📝 Caption found: {len(post_data["caption"])} characters, {len(caption_analysis.get("hashtags", []))} hashtags</div>', unsafe_allow_html=True)
     
     # Generate image hash
-    image_hash = hashlib.md5(post_data["image_url"].encode() if post_data["image_url"] else b"").hexdigest()
+    image_hash = hashlib.md5(post_data.get("image_url", "").encode()).hexdigest()
     
     # Use LLM for advanced analysis
     llm_analysis = {}
-    if groq_api_key and post_data["caption"]:
+    if groq_api_key and post_data.get("caption"):
+        with status_container.container():
+            st.markdown(f'<div class="debug-info">🤖 Running LLM analysis...</div>', unsafe_allow_html=True)
+            
         prompt = ANALYSIS_USER_PROMPT.format(
             caption=post_data["caption"][:500],  # Truncate for API limits
             visual_description=visual_description,
@@ -176,17 +224,23 @@ def analyze_single_post(analyzer: InstagramAnalyzer, competitor_name: str,
         if llm_response.get("content") and not llm_response.get("error"):
             try:
                 llm_analysis = json.loads(llm_response["content"])
-            except json.JSONDecodeError:
-                pass
+                with status_container.container():
+                    st.markdown(f'<div class="debug-info">✅ LLM analysis completed</div>', unsafe_allow_html=True)
+            except json.JSONDecodeError as e:
+                with status_container.container():
+                    st.markdown(f'<div class="debug-info">⚠️ LLM response parsing failed: {str(e)}</div>', unsafe_allow_html=True)
+        else:
+            with status_container.container():
+                st.markdown(f'<div class="debug-info">⚠️ LLM analysis failed: {llm_response.get("error", "Unknown error")}</div>', unsafe_allow_html=True)
     
-    # Combine rule-based and LLM analysis
+    # Combine rule-based and LLM analysis with safe defaults
     analysis = {
         "color_palette": {
             "dominant_hex": colors,
             "tone": llm_analysis.get("color_palette", {}).get("tone", "neutral"),
             "style": llm_analysis.get("color_palette", {}).get("style", "unknown"),
             "raw_score": llm_analysis.get("color_palette", {}).get("raw_score", 50),
-            "evidence": f"Extracted {len(colors)} dominant colors from image"
+            "evidence": f"Extracted {len(colors)} dominant colors from image" if image_analysis_success else "Image analysis failed - using defaults"
         },
         "tone_of_voice": {
             "label": llm_analysis.get("tone_of_voice", {}).get("label", "neutral"),
@@ -196,22 +250,22 @@ def analyze_single_post(analyzer: InstagramAnalyzer, competitor_name: str,
             "raw_score": llm_analysis.get("tone_of_voice", {}).get("raw_score", 50)
         },
         "cta": {
-            "presence": "strong" if caption_analysis["cta_detected"] else "none",
-            "text": caption_analysis["cta_text"],
+            "presence": "strong" if caption_analysis.get("cta_detected") else "none",
+            "text": caption_analysis.get("cta_text"),
             "strength": llm_analysis.get("cta", {}).get("strength", "none"),
-            "score": 80 if caption_analysis["cta_detected"] else 20
+            "score": 80 if caption_analysis.get("cta_detected") else 20
         },
         "hashtags_keywords": {
-            "hashtags": caption_analysis["hashtags"],
-            "top_keywords": caption_analysis["top_keywords"],
+            "hashtags": caption_analysis.get("hashtags", []),
+            "top_keywords": caption_analysis.get("top_keywords", []),
             "recommendation": llm_analysis.get("hashtags_keywords", {}).get("recommendation", 
                                             "Add more relevant hashtags")
         },
         "readability": {
-            "word_count": readability["word_count"],
-            "skimmable": readability["skimmable"],
-            "score": readability["score"],
-            "evidence": readability["evidence"]
+            "word_count": readability.get("word_count", 0),
+            "skimmable": readability.get("skimmable", False),
+            "score": readability.get("score", 0),
+            "evidence": readability.get("evidence", "No analysis available")
         },
         "emotional_imagery": {
             "visual_emotions": llm_analysis.get("emotional_imagery", {}).get("visual_emotions", 
@@ -226,13 +280,20 @@ def analyze_single_post(analyzer: InstagramAnalyzer, competitor_name: str,
         "competitor_name": competitor_name,
         "instagram_id": instagram_id,
         "post_url": post_url,
-        "timestamp": post_data["timestamp"],
-        "caption_text": post_data["caption"],
-        "image_url": post_data["image_url"],
+        "timestamp": post_data.get("timestamp"),
+        "caption_text": post_data.get("caption"),
+        "image_url": post_data.get("image_url"),
         "image_hash": image_hash,
         "analysis": analysis,
-        "errors": None
+        "errors": None if image_analysis_success else "Image scraping/processing failed"
     }
+    
+    # Clear status for final result
+    with status_container.container():
+        if image_analysis_success:
+            st.markdown(f'<div class="debug-info">✅ Analysis completed successfully</div>', unsafe_allow_html=True)
+        else:
+            st.markdown(f'<div class="debug-info">⚠️ Analysis completed with image processing issues</div>', unsafe_allow_html=True)
     
     return result
 
@@ -251,6 +312,8 @@ def main():
     <strong>⚠️ Legal Notice:</strong> This tool is for educational and research purposes. 
     Please ensure compliance with Instagram's Terms of Service and applicable data protection laws. 
     Respect rate limits and consider using official Instagram APIs for production use.
+    <br><br>
+    <strong>Note:</strong> Instagram actively blocks automated scraping. Some posts may fail to analyze due to anti-bot measures.
     </div>
     """, unsafe_allow_html=True)
     
@@ -361,6 +424,13 @@ def main():
             4. **Click "Start Analysis"** to fetch and analyze posts
             
             5. **Review results** in the tabs above
+            
+            ### ⚠️ Important Notes
+            
+            - Instagram actively blocks automated scraping
+            - Some posts may fail to analyze due to anti-bot measures
+            - Image extraction may fail for recent posts or protected accounts
+            - The tool will attempt to analyze text content even if images fail
             """)
     
     with tab2:
@@ -387,6 +457,9 @@ def analyze_posts(df: pd.DataFrame, groq_api_key: str):
     
     total_posts = len(df)
     
+    # Create container for detailed status updates
+    status_container = st.container()
+    
     for idx, row in df.iterrows():
         # Update progress
         progress = (idx + 1) / total_posts
@@ -395,13 +468,14 @@ def analyze_posts(df: pd.DataFrame, groq_api_key: str):
         
         # Analyze post
         try:
-            result = analyze_single_post(
-                analyzer=analyzer,
-                competitor_name=row['competitor_name'],
-                instagram_id=row['instagram_id'],
-                post_url=row['post_url'],
-                groq_api_key=groq_api_key
-            )
+            with status_container:
+                result = analyze_single_post(
+                    analyzer=analyzer,
+                    competitor_name=row['competitor_name'],
+                    instagram_id=row['instagram_id'],
+                    post_url=row['post_url'],
+                    groq_api_key=groq_api_key
+                )
             
             # Store result
             competitor = row['competitor_name']
@@ -419,7 +493,19 @@ def analyze_posts(df: pd.DataFrame, groq_api_key: str):
     progress_bar.empty()
     status_text.empty()
     
+    # Summary
+    successful_posts = sum(1 for posts in results.values() 
+                          for post in posts if not post.get('errors'))
+    
     st.success(f"✅ Analysis complete! Processed {total_posts} posts from {len(results)} competitors")
+    st.info(f"📊 Success rate: {successful_posts}/{total_posts} posts ({(successful_posts/total_posts)*100:.1f}%)")
+    
+    # Show failed posts if any
+    failed_posts = sum(1 for posts in results.values() 
+                      for post in posts if post.get('errors'))
+    
+    if failed_posts > 0:
+        st.warning(f"⚠️ {failed_posts} posts failed analysis (likely due to Instagram's anti-scraping measures)")
 
 def display_analysis_results():
     """Display analysis results in organized format"""
@@ -727,7 +813,7 @@ def display_strategy_results():
                         st.markdown(f"**KPI:** {rec.get('kpi', 'No KPI specified')}")
             
             # Example implementation
-            st.markdown("### 🚀 Example Strategy A Implementation")
+            st.markdown("### 🚀 Example Strategy Implementation")
             
             if strategy_key == 'strategy_a':
                 st.markdown("""
