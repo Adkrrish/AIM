@@ -12,9 +12,10 @@ from typing import Dict, List, Any, Optional
 from io import BytesIO
 from PIL import Image
 
+# CORRECTED IMPORTS - Using CombinedAnalyzer instead of SixParameterAnalyzer
 from utils import (
     InstagramCaptionScraper, 
-    SixParameterAnalyzer,
+    CombinedAnalyzer,  # Fixed: was SixParameterAnalyzer
     generate_three_suggestion_sets,
     generate_product_specific_prompts
 )
@@ -276,7 +277,8 @@ def six_parameter_analysis_tab(groq_api_key: str):
         st.warning("⚠️ Please scrape captions first in Tab 2")
         return
     
-    analyzer = SixParameterAnalyzer(groq_api_key)
+    # FIXED: Using CombinedAnalyzer instead of SixParameterAnalyzer
+    analyzer = CombinedAnalyzer(groq_api_key)
     
     # Display posts for analysis
     for competitor, posts in st.session_state.scraped_captions.items():
@@ -413,198 +415,3 @@ def analysis_results_tab():
             
             with col2:
                 st.markdown("#### Key Insights")
-                
-                # Color & Visual insights
-                color_analysis = analysis['parameter_1_color_visual']
-                st.markdown(f"**Visual Tone:** {color_analysis.get('tone', 'Unknown')} ({color_analysis.get('luxury_playful', 'Unknown')})")
-                
-                # Tone insights
-                tone_analysis = analysis['parameter_2_tone_voice']
-                st.markdown(f"**Primary Tone:** {tone_analysis.get('primary_tone', 'Unknown')} (Intensity: {tone_analysis.get('intensity', 0)}/10)")
-                
-                # CTA insights
-                cta_analysis = analysis['parameter_3_cta']
-                st.markdown(f"**CTA Strategy:** {cta_analysis.get('cta_strength', 'None')} - '{cta_analysis.get('cta_text', 'N/A')}'")
-                
-                # Hashtag insights
-                hashtag_analysis = analysis['parameter_4_hashtag_keywords']
-                st.markdown(f"**Hashtag Count:** {hashtag_analysis.get('hashtag_count', 0)} ({hashtag_analysis.get('hashtag_strategy', 'None')})")
-                
-                # Readability insights
-                readability_analysis = analysis['parameter_5_readability']
-                st.markdown(f"**Content Type:** {readability_analysis.get('readability_type', 'Unknown')} ({readability_analysis.get('word_count', 0)} words)")
-                
-                # Emotional insights
-                emotional_analysis = analysis['parameter_6_emotional_appeal']
-                st.markdown(f"**Emotional Impact:** {emotional_analysis.get('overall_emotional_impact', 'Unknown')}")
-    
-    st.info("✅ Detailed analysis complete. Proceed to Strategic Suggestions in Tab 5.")
-
-def strategic_suggestions_tab(groq_api_key: str):
-    """Tab 5: Generate 3 strategic suggestion sets"""
-    st.header("5️⃣ Strategic Suggestions")
-    st.markdown("Generate 3 strategic approaches based on 6-parameter competitor analysis")
-    
-    if not st.session_state.post_analyses:
-        st.warning("⚠️ Complete 6-parameter analysis first in Tab 3")
-        return
-    
-    if st.button("🎯 Generate 3 Suggestion Sets", type="primary"):
-        with st.spinner("Analyzing competitor data and generating strategic suggestions..."):
-            
-            suggestions = generate_three_suggestion_sets(
-                st.session_state.post_analyses, 
-                groq_api_key
-            )
-            
-            if not suggestions.get("error"):
-                st.session_state.suggestion_sets = suggestions
-                st.success("✅ 3 strategic suggestion sets generated!")
-            else:
-                st.error(f"❌ {suggestions['error']}")
-    
-    # Display suggestion sets
-    if st.session_state.suggestion_sets:
-        st.subheader("🎯 Strategic Suggestion Sets")
-        
-        for set_key, suggestion in st.session_state.suggestion_sets.items():
-            with st.expander(f"📋 {suggestion.get('name', set_key.title())}", expanded=True):
-                
-                # Header info
-                col1, col2 = st.columns([2, 1])
-                with col1:
-                    st.markdown(f"**Focus Parameters:** {', '.join(suggestion.get('focus_parameters', []))}")
-                    st.markdown(f"**Approach:** {suggestion.get('approach_description', 'N/A')}")
-                with col2:
-                    st.markdown(f"**Expected Impact:** {suggestion.get('expected_impact', 'Unknown').upper()}")
-                
-                # Strategy breakdown
-                st.markdown("#### Strategic Framework")
-                
-                col1, col2 = st.columns(2)
-                with col1:
-                    st.markdown(f"🎨 **Color/Visual:** {suggestion.get('color_visual_strategy', 'N/A')}")
-                    st.markdown(f"💬 **Tone of Voice:** {suggestion.get('tone_voice_strategy', 'N/A')}")
-                    st.markdown(f"🎯 **CTA Approach:** {suggestion.get('cta_strategy', 'N/A')}")
-                
-                with col2:
-                    st.markdown(f"#️⃣ **Hashtag Strategy:** {suggestion.get('hashtag_strategy', 'N/A')}")
-                    st.markdown(f"📖 **Readability:** {suggestion.get('readability_strategy', 'N/A')}")
-                    st.markdown(f"❤️ **Emotional Strategy:** {suggestion.get('emotional_strategy', 'N/A')}")
-        
-        st.info("✅ Strategic suggestions ready. Proceed to Product Prompts in Tab 6 to generate specific content creation prompts for your products.")
-
-def product_prompts_tab(groq_api_key: str):
-    """Tab 6: Generate product-specific prompts"""
-    st.header("6️⃣ Product-Specific Content Prompts")
-    st.markdown("Generate image and video creation prompts tailored to your products based on selected strategy")
-    
-    if not st.session_state.suggestion_sets:
-        st.warning("⚠️ Generate strategic suggestions first in Tab 5")
-        return
-    
-    if not st.session_state.company_data:
-        st.warning("⚠️ Company data required from Tab 1")
-        return
-    
-    # Strategy selection
-    st.subheader("🎯 Select Strategy")
-    strategy_options = list(st.session_state.suggestion_sets.keys())
-    strategy_names = [st.session_state.suggestion_sets[key].get('name', key.title()) for key in strategy_options]
-    
-    selected_strategy_idx = st.selectbox(
-        "Choose strategic approach for prompt generation:",
-        range(len(strategy_options)),
-        format_func=lambda x: strategy_names[x]
-    )
-    
-    selected_strategy_key = strategy_options[selected_strategy_idx]
-    selected_strategy = st.session_state.suggestion_sets[selected_strategy_key]
-    
-    # Display selected strategy summary
-    with st.expander("📋 Selected Strategy Summary", expanded=False):
-        st.markdown(f"**Strategy:** {selected_strategy.get('name', 'Unnamed')}")
-        st.markdown(f"**Focus:** {', '.join(selected_strategy.get('focus_parameters', []))}")
-        st.markdown(f"**Approach:** {selected_strategy.get('approach_description', 'N/A')}")
-    
-    # Generate prompts
-    if st.button("🎨 Generate Product-Specific Prompts", type="primary"):
-        with st.spinner("Generating product-specific image and video prompts..."):
-            
-            product_prompts = generate_product_specific_prompts(
-                selected_strategy,
-                st.session_state.company_data,
-                groq_api_key
-            )
-            
-            st.session_state.product_prompts[selected_strategy_key] = product_prompts
-            st.success("✅ Product-specific prompts generated!")
-    
-    # Display product prompts
-    if selected_strategy_key in st.session_state.product_prompts:
-        product_prompts = st.session_state.product_prompts[selected_strategy_key]
-        
-        st.subheader("🎬 Product-Specific Content Prompts")
-        
-        for product_name, prompts in product_prompts.items():
-            with st.expander(f"📦 {product_name} - Content Prompts", expanded=True):
-                
-                if "error" in prompts:
-                    st.error(f"❌ {prompts['error']}")
-                    continue
-                
-                # Image prompts
-                st.markdown("#### 🖼️ Image Generation Prompts")
-                for idx, prompt in enumerate(prompts.get('image_prompts', []), 1):
-                    st.markdown(f"**Prompt {idx}:**")
-                    st.code(prompt, language='text')
-                
-                # Video prompts
-                st.markdown("#### 🎬 Video Creation Prompts")
-                for idx, prompt in enumerate(prompts.get('video_prompts', []), 1):
-                    st.markdown(f"**Prompt {idx}:**")
-                    st.code(prompt, language='text')
-                
-                # Caption templates
-                st.markdown("#### ✍️ Caption Templates")
-                for idx, template in enumerate(prompts.get('caption_templates', []), 1):
-                    st.markdown(f"**Template {idx}:**")
-                    st.code(template, language='text')
-                
-                # Hashtag suggestions
-                st.markdown("#### #️⃣ Recommended Hashtags")
-                hashtags = prompts.get('hashtag_suggestions', [])
-                if hashtags:
-                    st.code(' '.join(hashtags), language='text')
-                
-                # Copy buttons
-                col1, col2, col3 = st.columns(3)
-                with col1:
-                    if st.button(f"📋 Copy Image Prompts", key=f"copy_img_{product_name}"):
-                        st.success("Image prompts ready to copy!")
-                with col2:
-                    if st.button(f"📋 Copy Video Prompts", key=f"copy_vid_{product_name}"):
-                        st.success("Video prompts ready to copy!")
-                with col3:
-                    if st.button(f"📋 Copy All Content", key=f"copy_all_{product_name}"):
-                        st.success("All content ready to copy!")
-        
-        # Final summary
-        st.markdown("---")
-        st.subheader("🎉 Content Creation Ready!")
-        st.success(f"""
-        **Summary:**
-        - ✅ {len(st.session_state.company_data)} products analyzed
-        - ✅ {len(st.session_state.post_analyses)} competitor posts analyzed across 6 parameters
-        - ✅ 3 strategic approaches generated
-        - ✅ Product-specific prompts created for selected strategy
-        
-        **Next Steps:**
-        1. Copy prompts for your preferred products
-        2. Use prompts with AI image/video generation tools (Midjourney, DALL-E, etc.)
-        3. Apply caption templates with your product details
-        4. Implement recommended hashtag strategy
-        """)
-
-if __name__ == "__main__":
-    main()
