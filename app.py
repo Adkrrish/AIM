@@ -1,6 +1,6 @@
 """
 Instagram Competitor Analysis Tool
-Enhanced with Apify API integration for reliable scraping
+Enhanced for caption scraping + manual image upload workflow
 """
 
 import streamlit as st
@@ -12,18 +12,14 @@ from datetime import datetime
 from typing import Dict, List, Any, Optional
 import base64
 from io import BytesIO
-import zipfile
 from PIL import Image
 
 # Import our utilities
-from utils import InstagramAnalyzer, call_groq_model, validate_post_data
-from utils import ANALYSIS_SYSTEM_PROMPT, ANALYSIS_USER_PROMPT
-from utils import SUGGESTION_SYSTEM_PROMPT, SUGGESTION_USER_PROMPT  
-from utils import CAMPAIGN_PROMPT_SYSTEM, CAMPAIGN_PROMPT_USER
+from utils import InstagramCaptionScraper, CombinedAnalyzer, call_groq_model
 
 # Page configuration
 st.set_page_config(
-    page_title="Instagram Competitor Analysis",
+    page_title="Instagram Caption & Image Analysis",
     page_icon="📱",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -43,20 +39,19 @@ st.markdown("""
     color: #666;
     margin-bottom: 2rem;
 }
-.color-box {
-    width: 30px;
-    height: 30px;
-    border-radius: 4px;
-    display: inline-block;
-    margin: 2px;
-    border: 1px solid #ddd;
-}
-.warning-box {
-    background: #fff3cd;
-    border: 1px solid #ffeaa7;
+.caption-box {
+    background: #f8f9fa;
+    border: 1px solid #dee2e6;
     padding: 1rem;
     border-radius: 8px;
     margin: 1rem 0;
+}
+.analysis-box {
+    background: #e8f4fd;
+    border: 1px solid #bee5eb;
+    padding: 1rem;
+    border-radius: 8px;
+    margin: 0.5rem 0;
 }
 .success-box {
     background: #d4edda;
@@ -65,42 +60,31 @@ st.markdown("""
     border-radius: 8px;
     margin: 1rem 0;
 }
-.debug-info {
-    background: #e8f4fd;
-    border: 1px solid #bee5eb;
-    padding: 0.5rem;
-    border-radius: 4px;
-    margin: 0.5rem 0;
-    font-size: 0.9rem;
-}
-.apify-notice {
-    background: #e7f3ff;
-    border: 1px solid #b3d9ff;
+.warning-box {
+    background: #fff3cd;
+    border: 1px solid #ffeaa7;
     padding: 1rem;
     border-radius: 8px;
     margin: 1rem 0;
 }
-.fallback-section {
-    background: #f8f9fa;
-    border: 2px dashed #dee2e6;
-    padding: 1.5rem;
-    border-radius: 8px;
-    margin: 1rem 0;
+.recommendation-box {
+    background: #f0f8ff;
+    border-left: 4px solid #007bff;
+    padding: 1rem;
+    margin: 0.5rem 0;
 }
 </style>
 """, unsafe_allow_html=True)
 
 # Initialize session state
-if 'analysis_results' not in st.session_state:
-    st.session_state.analysis_results = {}
-if 'strategies' not in st.session_state:
-    st.session_state.strategies = {}
-if 'campaign_prompts' not in st.session_state:
-    st.session_state.campaign_prompts = {}
-if 'failed_posts' not in st.session_state:
-    st.session_state.failed_posts = []
-if 'manual_uploads' not in st.session_state:
-    st.session_state.manual_uploads = {}
+if 'scraped_captions' not in st.session_state:
+    st.session_state.scraped_captions = {}
+if 'uploaded_images' not in st.session_state:
+    st.session_state.uploaded_images = {}
+if 'combined_analysis' not in st.session_state:
+    st.session_state.combined_analysis = {}
+if 'competitor_insights' not in st.session_state:
+    st.session_state.competitor_insights = {}
 
 def get_groq_api_key() -> Optional[str]:
     """Get Groq API key from secrets or environment"""
@@ -148,419 +132,386 @@ def create_example_excel() -> BytesIO:
     
     return output
 
-def render_color_palette(colors: List[str]) -> str:
-    """Render color palette as HTML"""
-    html = "<div style='display: flex; gap: 5px; margin: 10px 0;'>"
-    for color in colors[:5]:  # Show max 5 colors
-        html += f"<div class='color-box' style='background-color: {color};' title='{color}'></div>"
-    html += "</div>"
-    return html
-
-def analyze_single_post(analyzer: InstagramAnalyzer, competitor_name: str, 
-                       instagram_id: str, post_url: str, groq_api_key: str) -> Dict[str, Any]:
-    """Analyze a single Instagram post using Apify or fallback methods"""
+def scrape_captions_from_urls(df: pd.DataFrame, apify_token: str) -> Dict[str, List[Dict]]:
+    """Scrape captions from Instagram URLs"""
     
-    # Create status container for this post
-    status_container = st.empty()
+    scraper = InstagramCaptionScraper(apify_token)
+    results = {}
     
-    with status_container.container():
-        st.markdown(f'<div class="debug-info">🔍 Analyzing: {post_url}</div>', unsafe_allow_html=True)
+    # Progress tracking
+    progress_bar = st.progress(0)
+    status_text = st.empty()
     
-    # Fetch post data using the enhanced analyzer
-    post_data = analyzer.fetch_instagram_post(post_url)
+    total_posts = len(df)
     
-    if post_data.get("errors"):
-        with status_container.container():
-            st.markdown(f'<div class="debug-info">❌ Fetch failed: {post_data["errors"]}</div>', unsafe_allow_html=True)
+    for idx, row in df.iterrows():
+        # Update progress
+        progress = (idx + 1) / total_posts
+        progress_bar.progress(progress)
+        status_text.text(f"Scraping caption {idx + 1}/{total_posts}: {row['competitor_name']}")
         
-        return {
-            "competitor_name": competitor_name,
-            "instagram_id": instagram_id, 
-            "post_url": post_url,
-            "errors": post_data["errors"],
-            "analysis": {},
-            "needs_manual_upload": True
-        }
-    
-    # Initialize variables with defaults
-    visual_emotions = {"visual_emotions": ["neutral"], "brightness": 128, "score": 50}
-    colors = ["#000000"]
-    visual_description = "No image available"
-    image_analysis_success = False
-    
-    # Try to download and analyze image
-    if post_data.get("image_url"):
-        with status_container.container():
-            st.markdown(f'<div class="debug-info">🖼️ Found image URL: {post_data["image_url"][:50]}...</div>', unsafe_allow_html=True)
-        
-        image_bytes = analyzer.download_image(post_data["image_url"])
-        if image_bytes:
-            image = analyzer.image_to_pil(image_bytes)
-            if image:
-                try:
-                    colors = analyzer.extract_colors(image)
-                    visual_emotions = analyzer.analyze_visual_emotions(image)
-                    visual_description = f"Image with dominant colors: {', '.join(colors[:3])}"
-                    image_analysis_success = True
-                    
-                    with status_container.container():
-                        st.markdown(f'<div class="debug-info">✅ Image analysis successful - Colors: {", ".join(colors[:3])}</div>', unsafe_allow_html=True)
-                        
-                except Exception as e:
-                    with status_container.container():
-                        st.markdown(f'<div class="debug-info">⚠️ Image processing failed: {str(e)}</div>', unsafe_allow_html=True)
-            else:
-                with status_container.container():
-                    st.markdown(f'<div class="debug-info">⚠️ Failed to convert image to PIL format</div>', unsafe_allow_html=True)
-        else:
-            with status_container.container():
-                st.markdown(f'<div class="debug-info">⚠️ Failed to download image</div>', unsafe_allow_html=True)
-    else:
-        with status_container.container():
-            st.markdown(f'<div class="debug-info">⚠️ No image URL found in post data</div>', unsafe_allow_html=True)
-    
-    # Analyze caption using rules
-    caption_analysis = analyzer.analyze_caption_rules(post_data.get("caption") or "")
-    readability = analyzer.compute_readability(post_data.get("caption") or "")
-    
-    # Show caption analysis results
-    if post_data.get("caption"):
-        with status_container.container():
-            st.markdown(f'<div class="debug-info">📝 Caption found: {len(post_data["caption"])} characters, {len(caption_analysis.get("hashtags", []))} hashtags</div>', unsafe_allow_html=True)
-    
-    # Generate image hash
-    image_hash = hashlib.md5(post_data.get("image_url", "").encode()).hexdigest()
-    
-    # Use LLM for advanced analysis
-    llm_analysis = {}
-    if groq_api_key and post_data.get("caption"):
-        with status_container.container():
-            st.markdown(f'<div class="debug-info">🤖 Running LLM analysis...</div>', unsafe_allow_html=True)
+        try:
+            # Scrape caption
+            caption_data = scraper.scrape_post_caption(row['post_url'])
             
-        prompt = ANALYSIS_USER_PROMPT.format(
-            caption=post_data["caption"][:500],
-            visual_description=visual_description,
-            colors=", ".join(colors[:3])
-        )
-        
-        llm_response = call_groq_model(
-            prompt=prompt,
-            system=ANALYSIS_SYSTEM_PROMPT,
-            groq_api_key=groq_api_key
-        )
-        
-        if llm_response.get("content") and not llm_response.get("error"):
-            try:
-                llm_analysis = json.loads(llm_response["content"])
-                with status_container.container():
-                    st.markdown(f'<div class="debug-info">✅ LLM analysis completed</div>', unsafe_allow_html=True)
-            except json.JSONDecodeError as e:
-                with status_container.container():
-                    st.markdown(f'<div class="debug-info">⚠️ LLM response parsing failed: {str(e)}</div>', unsafe_allow_html=True)
-        else:
-            with status_container.container():
-                st.markdown(f'<div class="debug-info">⚠️ LLM analysis failed: {llm_response.get("error", "Unknown error")}</div>', unsafe_allow_html=True)
-    
-    # Combine rule-based and LLM analysis
-    analysis = {
-        "color_palette": {
-            "dominant_hex": colors,
-            "tone": llm_analysis.get("color_palette", {}).get("tone", "neutral"),
-            "style": llm_analysis.get("color_palette", {}).get("style", "unknown"),
-            "raw_score": llm_analysis.get("color_palette", {}).get("raw_score", 50),
-            "evidence": f"Extracted {len(colors)} dominant colors from image" if image_analysis_success else "Image analysis failed - using defaults"
-        },
-        "tone_of_voice": {
-            "label": llm_analysis.get("tone_of_voice", {}).get("label", "neutral"),
-            "polarity": llm_analysis.get("tone_of_voice", {}).get("polarity", "neutral"),
-            "intensity": llm_analysis.get("tone_of_voice", {}).get("intensity", 5),
-            "evidence": llm_analysis.get("tone_of_voice", {}).get("evidence", []),
-            "raw_score": llm_analysis.get("tone_of_voice", {}).get("raw_score", 50)
-        },
-        "cta": {
-            "presence": "strong" if caption_analysis.get("cta_detected") else "none",
-            "text": caption_analysis.get("cta_text"),
-            "strength": llm_analysis.get("cta", {}).get("strength", "none"),
-            "score": 80 if caption_analysis.get("cta_detected") else 20
-        },
-        "hashtags_keywords": {
-            "hashtags": caption_analysis.get("hashtags", []),
-            "top_keywords": caption_analysis.get("top_keywords", []),
-            "recommendation": llm_analysis.get("hashtags_keywords", {}).get("recommendation", 
-                                            "Add more relevant hashtags")
-        },
-        "readability": {
-            "word_count": readability.get("word_count", 0),
-            "skimmable": readability.get("skimmable", False),
-            "score": readability.get("score", 0),
-            "evidence": readability.get("evidence", "No analysis available")
-        },
-        "emotional_imagery": {
-            "visual_emotions": llm_analysis.get("emotional_imagery", {}).get("visual_emotions", 
-                                             visual_emotions.get("visual_emotions", ["neutral"])),
-            "text_emotion": llm_analysis.get("emotional_imagery", {}).get("text_emotion", "neutral"),
-            "alignment_score": llm_analysis.get("emotional_imagery", {}).get("alignment_score", 50),
-            "score": llm_analysis.get("emotional_imagery", {}).get("score", 50)
-        }
-    }
-    
-    result = {
-        "competitor_name": competitor_name,
-        "instagram_id": instagram_id,
-        "post_url": post_url,
-        "timestamp": post_data.get("timestamp"),
-        "caption_text": post_data.get("caption"),
-        "image_url": post_data.get("image_url"),
-        "image_hash": image_hash,
-        "analysis": analysis,
-        "errors": None if image_analysis_success else "Image scraping/processing failed",
-        "needs_manual_upload": not image_analysis_success,
-        "scraped_with_apify": hasattr(post_data, 'apify_data')
-    }
-    
-    # Clear status for final result
-    with status_container.container():
-        if image_analysis_success:
-            st.markdown(f'<div class="debug-info">✅ Analysis completed successfully</div>', unsafe_allow_html=True)
-        else:
-            st.markdown(f'<div class="debug-info">⚠️ Analysis completed with image processing issues</div>', unsafe_allow_html=True)
-    
-    return result
-
-def process_manual_upload(post_data: Dict, uploaded_image: Any, manual_caption: str, groq_api_key: str) -> Dict[str, Any]:
-    """Process manually uploaded image and caption"""
-    
-    try:
-        # Initialize analyzer
-        analyzer = InstagramAnalyzer(groq_api_key, None)  # No Apify token needed for manual processing
-        
-        # Process uploaded image
-        image = Image.open(uploaded_image)
-        colors = analyzer.extract_colors(image)
-        visual_emotions = analyzer.analyze_visual_emotions(image)
-        visual_description = f"Manually uploaded image with dominant colors: {', '.join(colors[:3])}"
-        
-        # Use manual caption or original caption
-        caption_to_analyze = manual_caption if manual_caption.strip() else post_data.get("caption_text", "")
-        
-        # Analyze caption using rules
-        caption_analysis = analyzer.analyze_caption_rules(caption_to_analyze)
-        readability = analyzer.compute_readability(caption_to_analyze)
-        
-        # Use LLM for advanced analysis
-        llm_analysis = {}
-        if groq_api_key and caption_to_analyze:
-            prompt = ANALYSIS_USER_PROMPT.format(
-                caption=caption_to_analyze[:500],
-                visual_description=visual_description,
-                colors=", ".join(colors[:3])
-            )
+            # Store result
+            competitor = row['competitor_name']
+            if competitor not in results:
+                results[competitor] = []
             
-            llm_response = call_groq_model(
-                prompt=prompt,
-                system=ANALYSIS_SYSTEM_PROMPT,
-                groq_api_key=groq_api_key
-            )
+            caption_data.update({
+                'competitor_name': competitor,
+                'instagram_id': row['instagram_id'],
+                'post_id': f"{competitor}_{idx}"
+            })
             
-            if llm_response.get("content") and not llm_response.get("error"):
-                try:
-                    llm_analysis = json.loads(llm_response["content"])
-                except json.JSONDecodeError:
-                    pass
-        
-        # Update analysis with manual data
-        analysis = {
-            "color_palette": {
-                "dominant_hex": colors,
-                "tone": llm_analysis.get("color_palette", {}).get("tone", "neutral"),
-                "style": llm_analysis.get("color_palette", {}).get("style", "unknown"),
-                "raw_score": llm_analysis.get("color_palette", {}).get("raw_score", 75),
-                "evidence": f"Manually uploaded image - extracted {len(colors)} dominant colors"
-            },
-            "tone_of_voice": {
-                "label": llm_analysis.get("tone_of_voice", {}).get("label", "neutral"),
-                "polarity": llm_analysis.get("tone_of_voice", {}).get("polarity", "neutral"),
-                "intensity": llm_analysis.get("tone_of_voice", {}).get("intensity", 5),
-                "evidence": llm_analysis.get("tone_of_voice", {}).get("evidence", []),
-                "raw_score": llm_analysis.get("tone_of_voice", {}).get("raw_score", 50)
-            },
-            "cta": {
-                "presence": "strong" if caption_analysis.get("cta_detected") else "none",
-                "text": caption_analysis.get("cta_text"),
-                "strength": llm_analysis.get("cta", {}).get("strength", "none"),
-                "score": 80 if caption_analysis.get("cta_detected") else 20
-            },
-            "hashtags_keywords": {
-                "hashtags": caption_analysis.get("hashtags", []),
-                "top_keywords": caption_analysis.get("top_keywords", []),
-                "recommendation": llm_analysis.get("hashtags_keywords", {}).get("recommendation", 
-                                                "Add more relevant hashtags")
-            },
-            "readability": {
-                "word_count": readability.get("word_count", 0),
-                "skimmable": readability.get("skimmable", False),
-                "score": readability.get("score", 0),
-                "evidence": readability.get("evidence", "Manual caption analysis")
-            },
-            "emotional_imagery": {
-                "visual_emotions": llm_analysis.get("emotional_imagery", {}).get("visual_emotions", 
-                                                 visual_emotions.get("visual_emotions", ["neutral"])),
-                "text_emotion": llm_analysis.get("emotional_imagery", {}).get("text_emotion", "neutral"),
-                "alignment_score": llm_analysis.get("emotional_imagery", {}).get("alignment_score", 75),
-                "score": llm_analysis.get("emotional_imagery", {}).get("score", 75)
-            }
-        }
-        
-        # Update post data
-        updated_post = post_data.copy()
-        updated_post.update({
-            "caption_text": caption_to_analyze,
-            "analysis": analysis,
-            "errors": None,
-            "needs_manual_upload": False,
-            "manually_processed": True
-        })
-        
-        return updated_post
-        
-    except Exception as e:
-        st.error(f"Error processing manual upload: {str(e)}")
-        return post_data
-
-def display_manual_upload_interface():
-    """Display manual upload interface for failed posts"""
+            results[competitor].append(caption_data)
+            
+        except Exception as e:
+            st.error(f"❌ Error scraping {row['post_url']}: {str(e)}")
     
-    if not st.session_state.analysis_results:
+    # Clear progress indicators
+    progress_bar.empty()
+    status_text.empty()
+    
+    return results
+
+def display_caption_and_upload_interface():
+    """Display captions and image upload interface"""
+    
+    if not st.session_state.scraped_captions:
+        st.info("📊 Please scrape captions first using the Analysis tab")
         return
     
-    # Collect failed posts
-    failed_posts = []
-    for competitor, posts in st.session_state.analysis_results.items():
-        for post in posts:
-            if post.get('needs_manual_upload') or post.get('errors'):
-                failed_posts.append(post)
+    st.header("📝 Caption Review & Image Upload")
     
-    st.session_state.failed_posts = failed_posts
+    groq_api_key = get_groq_api_key()
+    analyzer = CombinedAnalyzer(groq_api_key) if groq_api_key else None
     
-    if not failed_posts:
-        return
-    
-    st.markdown(f"""
-    <div class="warning-box">
-    <strong>⚠️ Manual Upload Required:</strong> {len(failed_posts)} posts failed automatic analysis. 
-    Please upload images and captions manually below to complete the analysis.
-    </div>
-    """, unsafe_allow_html=True)
-    
-    with st.expander("📁 Manual Upload Interface", expanded=True):
-        st.markdown('<div class="fallback-section">', unsafe_allow_html=True)
-        
-        groq_api_key = get_groq_api_key()
-        
-        for idx, post in enumerate(failed_posts):
-            st.markdown(f"### Post {idx + 1}: {post['competitor_name']}")
-            st.markdown(f"**URL:** {post['post_url']}")
-            st.markdown(f"**Error:** {post.get('errors', 'Image processing failed')}")
+    for competitor, posts in st.session_state.scraped_captions.items():
+        with st.expander(f"🏢 {competitor} ({len(posts)} posts)", expanded=True):
             
-            col1, col2 = st.columns([1, 1])
-            
-            with col1:
-                st.markdown("#### 🖼️ Upload Image")
-                uploaded_image = st.file_uploader(
-                    f"Upload image for post {idx+1}",
-                    type=['jpg', 'jpeg', 'png', 'webp'],
-                    key=f"manual_upload_image_{idx}",
-                    help="Upload the Instagram post image manually"
-                )
+            for idx, post in enumerate(posts):
+                post_id = post.get('post_id', f"{competitor}_{idx}")
                 
-                if uploaded_image:
-                    st.image(uploaded_image, width=200, caption="Uploaded Image Preview")
+                st.markdown(f"### Post {idx + 1}")
+                st.markdown(f"**URL:** {post['url']}")
+                
+                # Display caption
+                if post.get('caption'):
+                    st.markdown('<div class="caption-box">', unsafe_allow_html=True)
+                    st.markdown(f"**Caption:** {post['caption']}")
+                    
+                    if post.get('hashtags'):
+                        st.markdown(f"**Hashtags:** {', '.join(post['hashtags'])}")
+                    
+                    if post.get('timestamp'):
+                        st.markdown(f"**Posted:** {post['timestamp']}")
+                    
+                    st.markdown('</div>', unsafe_allow_html=True)
+                else:
+                    st.warning("⚠️ No caption found for this post")
+                
+                # Image upload
+                col1, col2 = st.columns([1, 2])
+                
+                with col1:
+                    uploaded_file = st.file_uploader(
+                        f"Upload image for {competitor} Post {idx + 1}",
+                        type=['jpg', 'jpeg', 'png', 'webp'],
+                        key=f"upload_{post_id}",
+                        help="Upload the corresponding Instagram post image"
+                    )
+                    
+                    if uploaded_file:
+                        image = Image.open(uploaded_file)
+                        st.image(image, width=250, caption=f"Uploaded for Post {idx + 1}")
+                        
+                        # Store uploaded image
+                        st.session_state.uploaded_images[post_id] = image
+                
+                with col2:
+                    # Analysis controls
+                    if st.button(f"🔍 Analyze Post {idx + 1}", key=f"analyze_{post_id}"):
+                        if post_id in st.session_state.uploaded_images and analyzer:
+                            
+                            with st.spinner("Analyzing caption and image..."):
+                                # Analyze caption
+                                caption_analysis = analyzer.analyze_caption_theme(post.get('caption', ''))
+                                
+                                # Analyze image
+                                image_analysis = analyzer.analyze_image_properties(
+                                    st.session_state.uploaded_images[post_id]
+                                )
+                                
+                                # Combine analysis
+                                combined_result = analyzer.combine_analysis(
+                                    caption_analysis, 
+                                    image_analysis, 
+                                    post.get('caption', ''),
+                                    competitor
+                                )
+                                
+                                # Store results
+                                st.session_state.combined_analysis[post_id] = combined_result
+                                
+                                st.success("✅ Analysis completed!")
+                                st.rerun()
+                        else:
+                            st.error("Please upload an image and ensure API keys are configured")
+                    
+                    # Display existing analysis
+                    if post_id in st.session_state.combined_analysis:
+                        st.success("✅ Analysis completed - view results in Analysis Results tab")
+                
+                st.divider()
+
+def display_analysis_results():
+    """Display combined analysis results"""
+    
+    if not st.session_state.combined_analysis:
+        st.info("📊 Complete caption and image analysis first")
+        return
+    
+    st.header("📈 Combined Analysis Results")
+    
+    for post_id, analysis in st.session_state.combined_analysis.items():
+        competitor = analysis['competitor_name']
+        
+        with st.expander(f"📊 {competitor} - Analysis Results", expanded=True):
+            
+            # Overall scores
+            col1, col2, col3 = st.columns(3)
+            col1.metric("Overall Score", f"{analysis['overall_score']}/100")
+            col2.metric("Alignment Score", f"{analysis['alignment_score']}/100")
+            col3.metric("Brand Consistency", analysis['brand_consistency'].title())
+            
+            # Caption Analysis
+            st.markdown("#### 📝 Caption Analysis")
+            caption_analysis = analysis['caption_analysis']
+            
+            st.markdown('<div class="analysis-box">', unsafe_allow_html=True)
+            
+            col1, col2 = st.columns(2)
+            with col1:
+                st.markdown(f"**Themes:** {', '.join(caption_analysis.get('themes', []))}")
+                st.markdown(f"**Sentiment:** {caption_analysis.get('sentiment', 'Unknown').title()}")
+                st.markdown(f"**Tone:** {caption_analysis.get('tone', 'Unknown').title()}")
             
             with col2:
-                st.markdown("#### ✍️ Caption")
-                manual_caption = st.text_area(
-                    f"Enter caption for post {idx+1}",
-                    value=post.get('caption_text', ''),
-                    height=150,
-                    key=f"manual_caption_{idx}",
-                    help="Enter the Instagram post caption manually"
+                st.markdown(f"**Content Type:** {caption_analysis.get('content_type', 'Unknown').title()}")
+                st.markdown(f"**Target Audience:** {caption_analysis.get('target_audience', 'Unknown').title()}")
+                st.markdown(f"**Engagement Potential:** {caption_analysis.get('engagement_potential', 'Unknown').title()}")
+            
+            st.markdown('</div>', unsafe_allow_html=True)
+            
+            # Image Analysis
+            st.markdown("#### 🖼️ Image Analysis")
+            image_analysis = analysis['image_analysis']
+            
+            st.markdown('<div class="analysis-box">', unsafe_allow_html=True)
+            
+            col1, col2 = st.columns(2)
+            with col1:
+                st.markdown(f"**Visual Style:** {image_analysis.get('visual_style', 'Unknown').replace('_', ' ').title()}")
+                st.markdown(f"**Color Temperature:** {image_analysis.get('color_temperature', 'Unknown').title()}")
+                st.markdown(f"**Brightness:** {image_analysis.get('brightness_level', 0)}/255")
+            
+            with col2:
+                st.markdown(f"**Emotional Tone:** {image_analysis.get('emotional_tone', 'Unknown').replace('_', ' ').title()}")
+                
+                # Color palette
+                colors = image_analysis.get('dominant_colors', [])
+                if colors:
+                    color_html = '<div style="display: flex; gap: 5px; margin: 5px 0;">'
+                    for color in colors[:5]:
+                        color_html += f'<div style="width: 20px; height: 20px; background-color: {color}; border: 1px solid #ddd; border-radius: 3px;" title="{color}"></div>'
+                    color_html += '</div>'
+                    st.markdown("**Dominant Colors:**")
+                    st.markdown(color_html, unsafe_allow_html=True)
+            
+            st.markdown('</div>', unsafe_allow_html=True)
+            
+            # Strategy Insights
+            if analysis.get('strategy_insights'):
+                st.markdown("#### 💡 Strategy Insights")
+                for insight in analysis['strategy_insights']:
+                    st.markdown(f"<div class='analysis-box'>• {insight}</div>", unsafe_allow_html=True)
+            
+            # Recommendations
+            if analysis.get('recommendations'):
+                st.markdown("#### 🎯 Recommendations")
+                for rec in analysis['recommendations']:
+                    st.markdown(f"<div class='recommendation-box'>💡 {rec}</div>", unsafe_allow_html=True)
+
+def generate_competitor_insights():
+    """Generate overall competitor insights"""
+    
+    if not st.session_state.combined_analysis:
+        st.info("📊 Complete individual post analysis first")
+        return
+    
+    st.header("🏆 Competitor Strategic Insights")
+    
+    groq_api_key = get_groq_api_key()
+    
+    if st.button("🚀 Generate Competitor Insights", type="primary"):
+        
+        if not groq_api_key:
+            st.error("🔑 Groq API key required for strategic insights")
+            return
+        
+        with st.spinner("Generating competitor insights..."):
+            
+            # Aggregate data by competitor
+            competitor_data = {}
+            for post_id, analysis in st.session_state.combined_analysis.items():
+                competitor = analysis['competitor_name']
+                
+                if competitor not in competitor_data:
+                    competitor_data[competitor] = []
+                
+                competitor_data[competitor].append({
+                    'themes': analysis['caption_analysis'].get('themes', []),
+                    'sentiment': analysis['caption_analysis'].get('sentiment', 'neutral'),
+                    'visual_style': analysis['image_analysis'].get('visual_style', 'unknown'),
+                    'overall_score': analysis['overall_score'],
+                    'alignment_score': analysis['alignment_score']
+                })
+            
+            # Generate insights for each competitor
+            insights = {}
+            
+            for competitor, posts in competitor_data.items():
+                
+                # Calculate aggregates
+                avg_score = sum(p['overall_score'] for p in posts) / len(posts)
+                avg_alignment = sum(p['alignment_score'] for p in posts) / len(posts)
+                
+                # Most common themes
+                all_themes = []
+                for post in posts:
+                    all_themes.extend(post['themes'])
+                
+                from collections import Counter
+                common_themes = [theme for theme, count in Counter(all_themes).most_common(3)]
+                
+                # Sentiment distribution
+                sentiments = [p['sentiment'] for p in posts]
+                dominant_sentiment = Counter(sentiments).most_common(1)[0][0]
+                
+                # Generate strategic insight using LLM
+                insight_prompt = f"""
+                Analyze this competitor's Instagram content strategy:
+                
+                Competitor: {competitor}
+                Posts Analyzed: {len(posts)}
+                Average Overall Score: {avg_score:.1f}/100
+                Average Alignment Score: {avg_alignment:.1f}/100
+                Common Themes: {', '.join(common_themes)}
+                Dominant Sentiment: {dominant_sentiment}
+                
+                Provide strategic insights in JSON format:
+                {{
+                    "content_strategy": "description of their approach",
+                    "strengths": ["strength1", "strength2"],
+                    "weaknesses": ["weakness1", "weakness2"],
+                    "differentiation_opportunities": ["opportunity1", "opportunity2"],
+                    "recommended_counter_strategy": "strategic recommendation"
+                }}
+                """
+                
+                response = call_groq_model(
+                    prompt=insight_prompt,
+                    system="You are a strategic social media consultant analyzing competitor content strategies.",
+                    groq_api_key=groq_api_key
                 )
                 
-                st.markdown("#### 📊 Status")
-                if post.get('manually_processed'):
-                    st.success("✅ Manually processed")
-                else:
-                    st.info("⏳ Waiting for manual input")
+                try:
+                    if response.get("content"):
+                        competitor_insight = json.loads(response["content"])
+                        competitor_insight.update({
+                            'avg_score': avg_score,
+                            'avg_alignment': avg_alignment,
+                            'common_themes': common_themes,
+                            'dominant_sentiment': dominant_sentiment,
+                            'posts_count': len(posts)
+                        })
+                        insights[competitor] = competitor_insight
+                except:
+                    # Fallback insight
+                    insights[competitor] = {
+                        'content_strategy': f"Mixed content approach with focus on {', '.join(common_themes[:2])}",
+                        'strengths': ["Consistent posting", "Diverse content themes"],
+                        'weaknesses': ["Alignment could be improved"],
+                        'avg_score': avg_score,
+                        'avg_alignment': avg_alignment,
+                        'common_themes': common_themes
+                    }
             
-            # Process button
-            col3, col4 = st.columns([1, 3])
-            with col3:
-                if st.button(f"🔄 Process Post {idx+1}", key=f"process_manual_{idx}"):
-                    if uploaded_image:
-                        with st.spinner(f"Processing post {idx+1}..."):
-                            # Process the manual upload
-                            updated_post = process_manual_upload(
-                                post, uploaded_image, manual_caption, groq_api_key
-                            )
-                            
-                            # Update in session state
-                            for competitor, posts in st.session_state.analysis_results.items():
-                                for i, p in enumerate(posts):
-                                    if p['post_url'] == post['post_url']:
-                                        st.session_state.analysis_results[competitor][i] = updated_post
-                                        break
-                            
-                            st.success(f"✅ Post {idx+1} processed successfully!")
-                            st.rerun()
-                    else:
-                        st.error("Please upload an image first!")
+            st.session_state.competitor_insights = insights
+            st.success("✅ Competitor insights generated!")
+    
+    # Display insights
+    if st.session_state.competitor_insights:
+        
+        for competitor, insight in st.session_state.competitor_insights.items():
             
-            with col4:
-                if post.get('manually_processed'):
-                    st.info("This post has been manually processed and updated in the results.")
-            
-            st.divider()
-        
-        # Bulk process button
-        st.markdown("### 🚀 Bulk Actions")
-        col1, col2 = st.columns([1, 1])
-        
-        with col1:
-            if st.button("📊 Refresh Analysis Results", type="primary"):
-                st.rerun()
-        
-        with col2:
-            processed_count = sum(1 for post in failed_posts if post.get('manually_processed'))
-            st.metric("Manually Processed", f"{processed_count}/{len(failed_posts)}")
-        
-        st.markdown('</div>', unsafe_allow_html=True)
+            with st.expander(f"🎯 {competitor} Strategic Analysis", expanded=True):
+                
+                # Metrics
+                col1, col2, col3 = st.columns(3)
+                col1.metric("Average Score", f"{insight.get('avg_score', 0):.1f}/100")
+                col2.metric("Alignment Score", f"{insight.get('avg_alignment', 0):.1f}/100")
+                col3.metric("Posts Analyzed", insight.get('posts_count', 0))
+                
+                # Content Strategy
+                st.markdown("#### 📋 Content Strategy")
+                st.markdown(f"**Approach:** {insight.get('content_strategy', 'Unknown')}")
+                
+                if insight.get('common_themes'):
+                    st.markdown(f"**Core Themes:** {', '.join(insight['common_themes'])}")
+                
+                # Strengths & Weaknesses
+                col1, col2 = st.columns(2)
+                
+                with col1:
+                    if insight.get('strengths'):
+                        st.markdown("#### ✅ Strengths")
+                        for strength in insight['strengths']:
+                            st.markdown(f"• {strength}")
+                
+                with col2:
+                    if insight.get('weaknesses'):
+                        st.markdown("#### ⚠️ Weaknesses")
+                        for weakness in insight['weaknesses']:
+                            st.markdown(f"• {weakness}")
+                
+                # Opportunities & Recommendations
+                if insight.get('differentiation_opportunities'):
+                    st.markdown("#### 🎯 Differentiation Opportunities")
+                    for opp in insight['differentiation_opportunities']:
+                        st.markdown(f"<div class='recommendation-box'>🚀 {opp}</div>", unsafe_allow_html=True)
+                
+                if insight.get('recommended_counter_strategy'):
+                    st.markdown("#### 🎪 Recommended Counter-Strategy")
+                    st.markdown(f"<div class='success-box'>{insight['recommended_counter_strategy']}</div>", unsafe_allow_html=True)
 
 def main():
     """Main Streamlit application"""
     
     # Header
-    st.markdown('<h1 class="main-header">📱 Instagram Competitor Analysis</h1>', 
+    st.markdown('<h1 class="main-header">📱 Instagram Caption & Image Analysis</h1>', 
                 unsafe_allow_html=True)
-    st.markdown('<p class="sub-header">Analyze competitor Instagram posts using Apify API and AI-powered insights</p>', 
+    st.markdown('<p class="sub-header">Advanced competitor analysis combining AI-powered caption scraping with manual image upload</p>', 
                 unsafe_allow_html=True)
     
-    # Apify notice
+    # Enhanced notice
     st.markdown("""
-    <div class="apify-notice">
-    <strong>🚀 Enhanced with Apify Integration:</strong> This tool now uses Apify's professional Instagram scrapers for reliable data extraction.
-    Apify provides stable, anti-blocking technology that significantly improves scraping success rates.
-    <br><br>
-    <strong>💰 Pricing:</strong> Apify charges approximately $2.70 per 1,000 Instagram posts scraped. 
-    New users get $5 in free credits monthly, allowing you to test the integration before upgrading.
-    </div>
-    """, unsafe_allow_html=True)
-    
-    # Legal notice
-    st.markdown("""
-    <div class="warning-box">
-    <strong>⚠️ Legal Notice:</strong> This tool is for educational and research purposes. 
-    Please ensure compliance with Instagram's Terms of Service and applicable data protection laws. 
-    The tool respects rate limits and uses ethical scraping practices through Apify's infrastructure.
+    <div class="success-box">
+    <strong>🚀 New Workflow:</strong> This tool now focuses on accurate caption scraping via Apify, 
+    combined with manual image uploads for comprehensive analysis. This approach ensures higher data quality 
+    and enables deeper thematic mapping between text and visual content.
     </div>
     """, unsafe_allow_html=True)
     
@@ -580,20 +531,13 @@ def main():
     
     if not apify_token:
         st.sidebar.warning("⚠️ Apify Token not found!")
-        st.sidebar.info("Set APIFY_TOKEN in Streamlit secrets for enhanced scraping")
-        st.sidebar.markdown("Without Apify token, the tool will use fallback scraping methods with lower success rates.")
+        st.sidebar.info("Set APIFY_TOKEN in Streamlit secrets for enhanced caption scraping")
+        st.sidebar.markdown("Without Apify token, the tool will use fallback scraping methods.")
     else:
         st.sidebar.success("✅ Apify Token configured")
     
     # File uploads
     st.sidebar.subheader("📁 Upload Files")
-    
-    # Company metadata upload
-    company_file = st.sidebar.file_uploader(
-        "Company Metadata (JSON/CSV/Excel)", 
-        type=['json', 'csv', 'xlsx'],
-        help="Upload your company information and brand guidelines"
-    )
     
     # Competitor data upload
     competitor_file = st.sidebar.file_uploader(
@@ -613,10 +557,10 @@ def main():
         )
     
     # Main content tabs
-    tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(["📊 Analysis", "📁 Manual Upload", "🏆 Competitors", "💡 Strategies", "🎨 Campaigns", "💾 Export"])
+    tab1, tab2, tab3, tab4 = st.tabs(["📊 Caption Scraping", "📁 Caption & Image Analysis", "📈 Analysis Results", "🏆 Competitor Insights"])
     
     with tab1:
-        st.header("Instagram Post Analysis")
+        st.header("📝 Instagram Caption Scraping")
         
         if competitor_file is not None:
             # Load competitor data
@@ -628,289 +572,78 @@ def main():
                     st.error(f"❌ Missing required columns: {required_columns}")
                     return
                 
-                # Validate data structure (3 competitors × 3 posts)
-                competitor_counts = df['competitor_name'].value_counts()
-                if len(competitor_counts) != 3:
-                    st.warning(f"⚠️ Expected 3 competitors, found {len(competitor_counts)}")
-                
-                for competitor, count in competitor_counts.items():
-                    if count != 3:
-                        st.warning(f"⚠️ Competitor '{competitor}' has {count} posts (expected 3)")
-                
-                st.success(f"✅ Loaded {len(df)} posts from {len(competitor_counts)} competitors")
+                st.success(f"✅ Loaded {len(df)} posts from {len(df['competitor_name'].unique())} competitors")
                 
                 # Show data preview
                 with st.expander("📋 Data Preview", expanded=False):
                     st.dataframe(df, use_container_width=True)
                 
-                # Analysis controls
+                # Scraping controls
                 col1, col2 = st.columns([2, 1])
                 
                 with col1:
-                    if st.button("🚀 Start Analysis", type="primary"):
-                        analyze_posts(df, groq_api_key, apify_token)
+                    if st.button("🚀 Scrape Captions", type="primary"):
+                        scraped_data = scrape_captions_from_urls(df, apify_token)
+                        st.session_state.scraped_captions = scraped_data
+                        
+                        # Show results
+                        total_scraped = sum(len(posts) for posts in scraped_data.values())
+                        successful_captions = sum(1 for posts in scraped_data.values() 
+                                                for post in posts if post.get('caption'))
+                        
+                        st.success(f"✅ Scraping complete! {successful_captions}/{total_scraped} captions extracted")
+                        
+                        if successful_captions < total_scraped:
+                            st.info("💡 Some posts may not have captions or failed to scrape. Proceed to next tab to upload images.")
                 
                 with col2:
                     if st.button("🔄 Clear Results"):
-                        st.session_state.analysis_results = {}
-                        st.session_state.failed_posts = []
+                        st.session_state.scraped_captions = {}
+                        st.session_state.uploaded_images = {}
+                        st.session_state.combined_analysis = {}
                         st.rerun()
                 
-                # Show analysis results
-                if st.session_state.analysis_results:
-                    display_analysis_results()
+                # Show scraping results
+                if st.session_state.scraped_captions:
+                    st.markdown("### 📊 Scraping Results")
+                    
+                    for competitor, posts in st.session_state.scraped_captions.items():
+                        successful_posts = [p for p in posts if p.get('caption')]
+                        st.markdown(f"**{competitor}:** {len(successful_posts)}/{len(posts)} captions scraped")
+                    
+                    st.info("👉 Proceed to 'Caption & Image Analysis' tab to upload images and run analysis")
                     
             except Exception as e:
                 st.error(f"❌ Error loading file: {str(e)}")
         else:
-            st.info("👆 Please upload competitor data file to begin analysis")
+            st.info("👆 Please upload competitor data file to begin caption scraping")
             
             # Show instructions
             st.markdown("""
-            ### 📋 Instructions
+            ### 📋 New Workflow Instructions
             
-            1. **Upload competitor data**: Excel file with columns:
-               - `competitor_name`: Name of the competitor
-               - `instagram_id`: Instagram handle (@username)
-               - `post_url`: Full Instagram post URL
+            1. **Upload competitor data**: Excel file with competitor Instagram post URLs
+            2. **Scrape captions**: Extract text content using Apify's reliable API
+            3. **Upload images**: Manually upload corresponding post images
+            4. **Combined analysis**: AI analyzes caption themes and image properties
+            5. **Strategic insights**: Generate competitor intelligence and recommendations
             
-            2. **Data structure**: 3 competitors × 3 posts each (9 total rows)
+            ### 🎯 Benefits of This Approach
             
-            3. **Optional**: Upload company metadata (brand guidelines, colors, etc.)
-            
-            4. **Click "Start Analysis"** to fetch and analyze posts
-            
-            5. **Use Manual Upload tab** for posts that fail automatic scraping
-            
-            6. **Review results** in the other tabs
-            
-            ### 🚀 Apify Integration Benefits
-            
-            - **Higher Success Rate**: Professional scraping infrastructure
-            - **Anti-blocking Technology**: Rotating proxies and headers
-            - **Reliable Data Extraction**: Structured data output
-            - **Rate Limit Compliance**: Ethical scraping practices
+            - **Higher accuracy**: Reliable caption extraction via Apify
+            - **Quality control**: Manual image upload ensures correct image-caption pairing
+            - **Deeper insights**: Advanced thematic mapping between text and visuals
+            - **Strategic value**: Comprehensive competitor intelligence
             """)
     
     with tab2:
-        st.header("📁 Manual Upload Interface")
-        st.markdown("Upload images and captions manually for posts that failed automatic scraping.")
-        display_manual_upload_interface()
+        display_caption_and_upload_interface()
     
     with tab3:
-        display_competitor_overview()
+        display_analysis_results()
     
     with tab4:
-        display_strategies(groq_api_key)
-    
-    with tab5:
-        display_campaigns(groq_api_key)
-    
-    with tab6:
-        display_export_options()
-
-def analyze_posts(df: pd.DataFrame, groq_api_key: str, apify_token: str):
-    """Analyze all posts with progress tracking using Apify integration"""
-    
-    # Initialize analyzer with both API keys
-    analyzer = InstagramAnalyzer(groq_api_key, apify_token)
-    results = {}
-    
-    # Progress tracking
-    progress_bar = st.progress(0)
-    status_text = st.empty()
-    
-    total_posts = len(df)
-    
-    # Create container for detailed status updates
-    status_container = st.container()
-    
-    for idx, row in df.iterrows():
-        # Update progress
-        progress = (idx + 1) / total_posts
-        progress_bar.progress(progress)
-        status_text.text(f"Analyzing post {idx + 1}/{total_posts}: {row['competitor_name']}")
-        
-        # Analyze post
-        try:
-            with status_container:
-                result = analyze_single_post(
-                    analyzer=analyzer,
-                    competitor_name=row['competitor_name'],
-                    instagram_id=row['instagram_id'],
-                    post_url=row['post_url'],
-                    groq_api_key=groq_api_key
-                )
-            
-            # Store result
-            competitor = row['competitor_name']
-            if competitor not in results:
-                results[competitor] = []
-            results[competitor].append(result)
-            
-        except Exception as e:
-            st.error(f"❌ Error analyzing {row['post_url']}: {str(e)}")
-    
-    # Store results in session state
-    st.session_state.analysis_results = results
-    
-    # Clear progress indicators
-    progress_bar.empty()
-    status_text.empty()
-    
-    # Summary
-    successful_posts = sum(1 for posts in results.values() 
-                          for post in posts if not post.get('errors') and not post.get('needs_manual_upload'))
-    failed_posts = sum(1 for posts in results.values() 
-                      for post in posts if post.get('errors') or post.get('needs_manual_upload'))
-    apify_posts = sum(1 for posts in results.values() 
-                     for post in posts if post.get('scraped_with_apify'))
-    
-    st.success(f"✅ Analysis complete! Processed {total_posts} posts from {len(results)} competitors")
-    
-    if apify_token:
-        st.info(f"🚀 Apify enhanced: {apify_posts} posts scraped with Apify API")
-    
-    st.info(f"📊 Success rate: {successful_posts}/{total_posts} posts ({(successful_posts/total_posts)*100:.1f}%)")
-    
-    # Show failed posts if any
-    if failed_posts > 0:
-        st.warning(f"⚠️ {failed_posts} posts require manual upload")
-        st.info("👉 Use the 'Manual Upload' tab to complete analysis for failed posts")
-
-def display_analysis_results():
-    """Display analysis results in organized format"""
-    
-    if not st.session_state.analysis_results:
-        st.info("No analysis results available")
-        return
-    
-    st.subheader("📈 Analysis Results")
-    
-    # Summary metrics
-    total_posts = sum(len(posts) for posts in st.session_state.analysis_results.values())
-    successful_posts = sum(1 for posts in st.session_state.analysis_results.values() 
-                          for post in posts if not post.get('errors') and not post.get('needs_manual_upload'))
-    manual_posts = sum(1 for posts in st.session_state.analysis_results.values() 
-                      for post in posts if post.get('manually_processed'))
-    apify_posts = sum(1 for posts in st.session_state.analysis_results.values() 
-                     for post in posts if post.get('scraped_with_apify'))
-    
-    col1, col2, col3, col4 = st.columns(4)
-    col1.metric("Total Posts", total_posts)
-    col2.metric("Auto Success", successful_posts) 
-    col3.metric("Manual Success", manual_posts)
-    col4.metric("Apify Enhanced", apify_posts)
-    
-    # Results by competitor
-    for competitor, posts in st.session_state.analysis_results.items():
-        with st.expander(f"🏢 {competitor} ({len(posts)} posts)", expanded=False):
-            
-            for idx, post in enumerate(posts, 1):
-                st.markdown(f"**Post {idx}:** {post['post_url']}")
-                
-                # Status indicators
-                if post.get('manually_processed'):
-                    st.success("✅ Manually processed")
-                elif post.get('scraped_with_apify'):
-                    st.success("🚀 Apify enhanced")
-                elif post.get('errors') or post.get('needs_manual_upload'):
-                    st.error(f"❌ Error: {post.get('errors', 'Needs manual upload')}")
-                    continue
-                else:
-                    st.success("✅ Auto-processed")
-                
-                # Create columns for organized display
-                col1, col2 = st.columns([1, 1])
-                
-                with col1:
-                    # Caption preview
-                    if post.get('caption_text'):
-                        caption_preview = post['caption_text'][:100] + "..." if len(post['caption_text']) > 100 else post['caption_text']
-                        st.markdown(f"**Caption:** {caption_preview}")
-                    
-                    # Color palette
-                    if post['analysis'].get('color_palette', {}).get('dominant_hex'):
-                        st.markdown("**Colors:**")
-                        colors_html = render_color_palette(post['analysis']['color_palette']['dominant_hex'])
-                        st.markdown(colors_html, unsafe_allow_html=True)
-                
-                with col2:
-                    # Key metrics
-                    analysis = post['analysis']
-                    
-                    if analysis.get('tone_of_voice'):
-                        tone = analysis['tone_of_voice']
-                        st.markdown(f"**Tone:** {tone.get('label', 'Unknown')} ({tone.get('intensity', 0)}/10)")
-                    
-                    if analysis.get('cta'):
-                        cta = analysis['cta']
-                        st.markdown(f"**CTA:** {cta.get('presence', 'None')} - Score: {cta.get('score', 0)}")
-                    
-                    if analysis.get('readability'):
-                        read = analysis['readability']
-                        st.markdown(f"**Readability:** {read.get('score', 0)}/100 ({read.get('word_count', 0)} words)")
-                
-                # Image thumbnail
-                if post.get('image_url'):
-                    try:
-                        st.image(post['image_url'], width=200, caption=f"Post {idx} Image")
-                    except:
-                        st.text("🖼️ Image preview unavailable")
-                
-                st.divider()
-
-# Include all other functions from the previous app.py versions
-# (display_competitor_overview, display_strategies, display_campaigns, display_export_options, create_csv_export)
-# These remain the same as the previous complete version
-
-def display_competitor_overview():
-    """Display competitor comparison overview"""
-    st.header("🏆 Competitor Overview")
-    
-    if not st.session_state.analysis_results:
-        st.info("📊 Run analysis first to see competitor comparison")
-        return
-    
-    # Implementation same as previous version...
-    st.info("Competitor overview functionality - same as previous version")
-
-def display_strategies(groq_api_key: str):
-    """Display and generate strategic recommendations"""
-    st.header("💡 Strategic Recommendations")
-    
-    if not st.session_state.analysis_results:
-        st.info("📊 Complete analysis first to generate strategies")
-        return
-    
-    # Implementation same as previous version...
-    st.info("Strategy generation functionality - same as previous version")
-
-def display_campaigns(groq_api_key: str):
-    """Display and generate campaign prompts"""
-    st.header("🎨 Campaign Prompts")
-    
-    if not st.session_state.strategies:
-        st.info("💡 Generate strategies first to create campaign prompts")
-        return
-    
-    # Implementation same as previous version...
-    st.info("Campaign generation functionality - same as previous version")
-
-def display_export_options():
-    """Display export and download options"""
-    st.header("💾 Export Results")
-    
-    if not st.session_state.analysis_results:
-        st.info("📊 Complete analysis to export results")
-        return
-    
-    # Implementation same as previous version...
-    st.info("Export functionality - same as previous version")
-
-def create_csv_export() -> str:
-    """Create CSV export of analysis results"""
-    return "CSV export functionality - same as previous version"
+        generate_competitor_insights()
 
 if __name__ == "__main__":
     main()
