@@ -1,417 +1,288 @@
 """
-Instagram Competitor Analysis Tool
-Complete workflow: Company data → Caption scraping → 6-parameter analysis → 3 suggestion sets → Product-specific prompts
+Simplified Instagram Competitor Analysis Tool
+Lightweight single-page application
 """
 
 import streamlit as st
 import pandas as pd
 import json
 import os
-from datetime import datetime
-from typing import Dict, List, Any, Optional
-from io import BytesIO
 from PIL import Image
+from utils import SimpleCaptionScraper, SimpleAnalyzer, generate_simple_prompts
 
-# CORRECTED IMPORTS - Using CombinedAnalyzer instead of SixParameterAnalyzer
-from utils import (
-    InstagramCaptionScraper, 
-    CombinedAnalyzer,  # Fixed: was SixParameterAnalyzer
-    generate_three_suggestion_sets,
-    generate_product_specific_prompts
-)
-
-# Page configuration
+# Page config
 st.set_page_config(
-    page_title="Instagram Competitor Analysis - Product Focused",
+    page_title="Instagram Analysis - Simplified", 
     page_icon="📱",
-    layout="wide",
-    initial_sidebar_state="expanded"
+    layout="wide"
 )
 
-# Initialize session state
-if 'company_data' not in st.session_state:
-    st.session_state.company_data = None
-if 'scraped_captions' not in st.session_state:
-    st.session_state.scraped_captions = {}
-if 'post_analyses' not in st.session_state:
-    st.session_state.post_analyses = []
-if 'suggestion_sets' not in st.session_state:
-    st.session_state.suggestion_sets = {}
-if 'product_prompts' not in st.session_state:
-    st.session_state.product_prompts = {}
-
-def get_groq_api_key() -> Optional[str]:
+# Get API keys
+def get_api_keys():
     try:
-        return st.secrets["GROQ_API_KEY"]
+        groq_key = st.secrets.get("GROQ_API_KEY") or os.getenv("GROQ_API_KEY") 
+        apify_token = st.secrets.get("APIFY_TOKEN") or os.getenv("APIFY_TOKEN")
+        return groq_key, apify_token
     except:
-        return os.getenv("GROQ_API_KEY")
-
-def get_apify_token() -> Optional[str]:
-    try:
-        return st.secrets["APIFY_TOKEN"]
-    except:
-        return os.getenv("APIFY_TOKEN")
+        return os.getenv("GROQ_API_KEY"), os.getenv("APIFY_TOKEN")
 
 def main():
+    # Header
     st.title("📱 Instagram Competitor Analysis")
-    st.markdown("**Complete Product-Focused Workflow:** Company Data → Caption Scraping → 6-Parameter Analysis → Strategic Suggestions → Product-Specific Prompts")
+    st.markdown("**Simplified Workflow:** Upload Data → Scrape Captions → Analyze → Generate Prompts")
     
-    # API Configuration Sidebar
-    st.sidebar.header("🔧 API Configuration")
-    groq_api_key = get_groq_api_key()
-    apify_token = get_apify_token()
+    # Initialize session state
+    for key in ['company_data', 'scraped_data', 'analysis_results', 'prompts']:
+        if key not in st.session_state:
+            st.session_state[key] = []
     
-    if not groq_api_key:
-        st.sidebar.error("🔑 GROQ API Key required")
-        st.sidebar.stop()
-    else:
-        st.sidebar.success("✅ Groq API Key configured")
+    # API status
+    groq_key, apify_token = get_api_keys()
     
-    if not apify_token:
-        st.sidebar.warning("⚠️ Apify Token recommended")
-    else:
-        st.sidebar.success("✅ Apify Token configured")
-    
-    # Main workflow tabs
-    tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
-        "1️⃣ Company Data",
-        "2️⃣ Scrape Captions", 
-        "3️⃣ 6-Parameter Analysis",
-        "4️⃣ Analysis Results",
-        "5️⃣ Strategic Suggestions", 
-        "6️⃣ Product Prompts"
-    ])
-    
-    with tab1:
-        company_data_tab()
-    
-    with tab2:
-        scrape_captions_tab(apify_token)
-    
-    with tab3:
-        six_parameter_analysis_tab(groq_api_key)
-    
-    with tab4:
-        analysis_results_tab()
-    
-    with tab5:
-        strategic_suggestions_tab(groq_api_key)
-    
-    with tab6:
-        product_prompts_tab(groq_api_key)
-
-def company_data_tab():
-    """Tab 1: Upload and manage company data"""
-    st.header("1️⃣ Company & Product Portfolio Data")
-    st.markdown("Upload your company information and product portfolio for targeted analysis and recommendations.")
-    
-    # File upload options
     col1, col2 = st.columns(2)
-    
     with col1:
-        st.subheader("📁 Upload Company Data")
-        company_file = st.file_uploader(
-            "Upload company metadata",
-            type=['json', 'xlsx', 'csv'],
-            help="JSON file with company info and product portfolio"
-        )
-        
-        if company_file:
-            if company_file.type == "application/json":
-                company_data = json.load(company_file)
-            elif company_file.name.endswith('.xlsx'):
-                df = pd.read_excel(company_file)
-                company_data = df.to_dict('records')
-            else:
-                df = pd.read_csv(company_file)
-                company_data = df.to_dict('records')
-            
-            st.session_state.company_data = company_data
-            st.success(f"✅ Loaded data for {len(company_data)} products")
-    
+        st.success("✅ Groq API" if groq_key else "❌ Groq API")
     with col2:
-        st.subheader("📝 Manual Entry")
-        if st.button("➕ Add Product Manually"):
-            if 'manual_products' not in st.session_state:
-                st.session_state.manual_products = []
+        st.success("✅ Apify API" if apify_token else "❌ Apify API")
+    
+    # Section 1: Company Data
+    st.header("1️⃣ Company Products")
+    
+    company_file = st.file_uploader(
+        "Upload product portfolio", 
+        type=['json', 'csv', 'xlsx'],
+        help="File with product names, descriptions, categories"
+    )
+    
+    if company_file:
+        try:
+            if company_file.name.endswith('.json'):
+                st.session_state.company_data = json.load(company_file)
+            elif company_file.name.endswith('.csv'):
+                df = pd.read_csv(company_file)
+                st.session_state.company_data = df.to_dict('records')
+            else:
+                df = pd.read_excel(company_file)
+                st.session_state.company_data = df.to_dict('records')
             
-            with st.form("add_product_form"):
-                product_name = st.text_input("Product Name")
-                product_description = st.text_area("Product Description")
-                product_category = st.selectbox("Category", 
-                    ["Fashion", "Food", "Technology", "Beauty", "Lifestyle", "Fitness", "Travel", "Other"])
-                product_price_range = st.selectbox("Price Range", 
-                    ["Budget", "Mid-range", "Premium", "Luxury"])
-                target_audience = st.text_input("Target Audience")
+            st.success(f"✅ Loaded {len(st.session_state.company_data)} products")
+            
+            # Show first few products
+            for i, product in enumerate(st.session_state.company_data[:3]):
+                st.write(f"**{product.get('name', f'Product {i+1}')}:** {product.get('category', 'No category')}")
                 
-                if st.form_submit_button("Add Product"):
-                    product_data = {
-                        "name": product_name,
-                        "description": product_description,
-                        "category": product_category,
-                        "price_range": product_price_range,
-                        "target_audience": target_audience
-                    }
-                    st.session_state.manual_products.append(product_data)
-                    st.success(f"Added {product_name}")
-        
-        if 'manual_products' in st.session_state and st.session_state.manual_products:
-            st.session_state.company_data = st.session_state.manual_products
+        except Exception as e:
+            st.error(f"Error loading file: {e}")
     
-    # Display current company data
-    if st.session_state.company_data:
-        st.subheader("📊 Current Product Portfolio")
-        
-        for idx, product in enumerate(st.session_state.company_data):
-            with st.expander(f"📦 {product.get('name', f'Product {idx+1}')}", expanded=False):
-                col1, col2 = st.columns(2)
-                with col1:
-                    st.markdown(f"**Description:** {product.get('description', 'N/A')}")
-                    st.markdown(f"**Category:** {product.get('category', 'N/A')}")
-                with col2:
-                    st.markdown(f"**Price Range:** {product.get('price_range', 'N/A')}")
-                    st.markdown(f"**Target Audience:** {product.get('target_audience', 'N/A')}")
-        
-        st.info("✅ Company data loaded. Proceed to 'Scrape Captions' tab.")
-    else:
-        st.info("📤 Please upload company data or add products manually to continue.")
-
-def scrape_captions_tab(apify_token: str):
-    """Tab 2: Scrape Instagram captions"""
-    st.header("2️⃣ Instagram Caption Scraping")
-    st.markdown("Upload competitor post URLs and scrape captions using Apify.")
+    # Manual product entry
+    with st.expander("➕ Add Product Manually"):
+        with st.form("add_product"):
+            name = st.text_input("Product Name")
+            category = st.selectbox("Category", ["Fashion", "Food", "Tech", "Beauty", "Lifestyle", "Other"])
+            description = st.text_area("Description", height=100)
+            
+            if st.form_submit_button("Add Product"):
+                if name:
+                    new_product = {"name": name, "category": category, "description": description}
+                    st.session_state.company_data.append(new_product)
+                    st.success(f"Added {name}")
+                    st.rerun()
     
-    if not st.session_state.company_data:
-        st.warning("⚠️ Please upload company data first in Tab 1")
-        return
+    # Section 2: Competitor Data & Scraping
+    st.header("2️⃣ Competitor Posts")
     
-    # File upload for competitor data
     competitor_file = st.file_uploader(
-        "Upload competitor posts Excel file",
+        "Upload competitor URLs",
         type=['xlsx'],
-        help="Excel file with columns: competitor_name, instagram_id, post_url"
+        help="Excel with columns: competitor_name, post_url"
     )
     
     if competitor_file:
-        df = pd.read_excel(competitor_file)
-        required_columns = ['competitor_name', 'instagram_id', 'post_url']
-        
-        if all(col in df.columns for col in required_columns):
-            st.success(f"✅ Loaded {len(df)} posts from {len(df['competitor_name'].unique())} competitors")
+        try:
+            df = pd.read_excel(competitor_file)
+            required_cols = ['competitor_name', 'post_url']
             
-            # Show data preview
-            with st.expander("📋 Data Preview", expanded=False):
-                st.dataframe(df)
-            
-            # Scraping controls
-            col1, col2 = st.columns([3, 1])
-            
-            with col1:
-                if st.button("🚀 Scrape All Captions", type="primary"):
-                    scrape_all_captions(df, apify_token)
-            
-            with col2:
-                if st.button("🔄 Clear Results"):
-                    st.session_state.scraped_captions = {}
-                    st.rerun()
-        else:
-            st.error(f"❌ Missing required columns: {required_columns}")
-    
-    # Display scraping results
-    if st.session_state.scraped_captions:
-        st.subheader("📊 Scraping Results")
-        
-        total_posts = sum(len(posts) for posts in st.session_state.scraped_captions.values())
-        successful_posts = sum(1 for posts in st.session_state.scraped_captions.values() 
-                              for post in posts if post.get('caption'))
-        
-        col1, col2, col3 = st.columns(3)
-        col1.metric("Total Posts", total_posts)
-        col2.metric("Successful Scrapes", successful_posts)
-        col3.metric("Success Rate", f"{(successful_posts/total_posts)*100:.1f}%")
-        
-        st.info("✅ Caption scraping completed. Proceed to '6-Parameter Analysis' tab.")
-
-def scrape_all_captions(df: pd.DataFrame, apify_token: str):
-    """Scrape all captions with progress tracking"""
-    scraper = InstagramCaptionScraper(apify_token)
-    results = {}
-    
-    progress_bar = st.progress(0)
-    status_text = st.empty()
-    
-    for idx, row in df.iterrows():
-        progress_bar.progress((idx + 1) / len(df))
-        status_text.text(f"Scraping {idx + 1}/{len(df)}: {row['competitor_name']}")
-        
-        caption_data = scraper.scrape_post_caption(row['post_url'])
-        caption_data.update({
-            'competitor_name': row['competitor_name'],
-            'instagram_id': row['instagram_id'],
-            'post_id': f"{row['competitor_name']}_{idx}"
-        })
-        
-        competitor = row['competitor_name']
-        if competitor not in results:
-            results[competitor] = []
-        results[competitor].append(caption_data)
-    
-    st.session_state.scraped_captions = results
-    progress_bar.empty()
-    status_text.empty()
-
-def six_parameter_analysis_tab(groq_api_key: str):
-    """Tab 3: 6-parameter analysis with image uploads"""
-    st.header("3️⃣ 6-Parameter Analysis")
-    st.markdown("""
-    **Analyze competitor posts based on 6 key parameters:**
-    1. Color Palette & Visual Style
-    2. Tone of Voice in Captions  
-    3. CTA Presence & Strength
-    4. Hashtag & Keyword Strategy
-    5. Readability & Clarity
-    6. Emotional Appeal & Imagery
-    """)
-    
-    if not st.session_state.scraped_captions:
-        st.warning("⚠️ Please scrape captions first in Tab 2")
-        return
-    
-    # FIXED: Using CombinedAnalyzer instead of SixParameterAnalyzer
-    analyzer = CombinedAnalyzer(groq_api_key)
-    
-    # Display posts for analysis
-    for competitor, posts in st.session_state.scraped_captions.items():
-        with st.expander(f"🏢 {competitor} ({len(posts)} posts)", expanded=True):
-            
-            for idx, post in enumerate(posts):
-                st.markdown(f"### Post {idx + 1}")
-                st.markdown(f"**URL:** {post['url']}")
+            if all(col in df.columns for col in required_cols):
+                st.success(f"✅ Loaded {len(df)} competitor posts")
+                st.dataframe(df.head(), use_container_width=True)
                 
-                if post.get('caption'):
-                    st.markdown(f"**Caption:** {post['caption'][:200]}...")
-                    if post.get('hashtags'):
-                        st.markdown(f"**Hashtags:** {', '.join(post['hashtags'][:5])}")
-                
-                col1, col2 = st.columns([1, 2])
-                
-                with col1:
-                    # Image upload
-                    uploaded_file = st.file_uploader(
-                        f"Upload image for {competitor} Post {idx + 1}",
-                        type=['jpg', 'jpeg', 'png'],
-                        key=f"img_{post.get('post_id', f'{competitor}_{idx}')}"
-                    )
+                if st.button("🚀 Scrape Captions", type="primary"):
+                    scraper = SimpleCaptionScraper(apify_token)
+                    results = []
                     
-                    if uploaded_file:
-                        image = Image.open(uploaded_file)
-                        st.image(image, width=200)
-                
-                with col2:
-                    post_id = post.get('post_id', f"{competitor}_{idx}")
+                    progress = st.progress(0)
+                    status = st.empty()
                     
-                    if st.button(f"🔍 Analyze 6 Parameters", key=f"analyze_{post_id}"):
-                        if uploaded_file:
-                            with st.spinner("Running 6-parameter analysis..."):
-                                image = Image.open(uploaded_file)
-                                
+                    for idx, row in df.iterrows():
+                        progress.progress((idx + 1) / len(df))
+                        status.text(f"Scraping {idx + 1}/{len(df)}: {row['competitor_name']}")
+                        
+                        result = scraper.scrape_caption(row['post_url'])
+                        result['competitor_name'] = row['competitor_name']
+                        results.append(result)
+                    
+                    st.session_state.scraped_data = results
+                    progress.empty()
+                    status.empty()
+                    
+                    successful = sum(1 for r in results if r['success'])
+                    st.success(f"✅ Scraped {successful}/{len(results)} captions successfully")
+                    
+            else:
+                st.error(f"Missing columns: {required_cols}")
+                
+        except Exception as e:
+            st.error(f"Error loading competitor file: {e}")
+    
+    # Section 3: Results & Analysis
+    if st.session_state.scraped_data:
+        st.header("3️⃣ Scraped Results & Analysis")
+        
+        # Show scraped data
+        with st.expander("📄 View Scraped Captions", expanded=False):
+            for i, item in enumerate(st.session_state.scraped_data[:5]):
+                if item['success']:
+                    st.write(f"**{item['competitor_name']}:** {item['caption'][:150]}...")
+                    st.write(f"Hashtags: {', '.join(item['hashtags'][:5])}")
+                    st.divider()
+        
+        # Image upload and analysis
+        st.subheader("📸 Upload Images for Analysis")
+        
+        # Select posts for analysis
+        successful_posts = [item for item in st.session_state.scraped_data if item['success']]
+        
+        if successful_posts:
+            selected_indices = st.multiselect(
+                "Select posts to analyze (max 5)",
+                range(min(5, len(successful_posts))),
+                format_func=lambda x: f"{successful_posts[x]['competitor_name']} - {successful_posts[x]['caption'][:50]}...",
+                max_selections=5
+            )
+            
+            if selected_indices:
+                analyzer = SimpleAnalyzer(groq_key)
+                analyses = []
+                
+                for idx in selected_indices:
+                    post = successful_posts[idx]
+                    
+                    st.write(f"**{post['competitor_name']}**")
+                    col1, col2 = st.columns([1, 2])
+                    
+                    with col1:
+                        uploaded_img = st.file_uploader(
+                            f"Image for {post['competitor_name']}",
+                            type=['jpg', 'png'],
+                            key=f"img_{idx}"
+                        )
+                        
+                        if uploaded_img:
+                            image = Image.open(uploaded_img)
+                            st.image(image, width=200)
+                    
+                    with col2:
+                        st.write(f"Caption: {post['caption'][:200]}...")
+                        
+                        if st.button(f"Analyze Post", key=f"analyze_{idx}"):
+                            with st.spinner("Analyzing..."):
                                 analysis = analyzer.analyze_post(
-                                    post.get('caption', ''),
-                                    image,
-                                    competitor,
-                                    post['url']
+                                    post['caption'],
+                                    Image.open(uploaded_img) if uploaded_img else None
                                 )
                                 
-                                st.session_state.post_analyses.append(analysis)
-                                st.success(f"✅ Analysis completed! Overall Score: {analysis['overall_score']}/100")
+                                analyses.append(analysis)
                                 
-                                # Show quick results preview
-                                with st.expander("📊 Analysis Preview", expanded=False):
-                                    col1, col2, col3 = st.columns(3)
-                                    col1.metric("Color/Visual", f"{analysis['parameter_1_color_visual']['score']}/100")
-                                    col2.metric("Tone of Voice", f"{analysis['parameter_2_tone_voice']['score']}/100") 
-                                    col3.metric("CTA Strength", f"{analysis['parameter_3_cta']['score']}/100")
-                        else:
-                            st.error("Please upload an image first")
+                                # Show results
+                                col_a, col_b, col_c = st.columns(3)
+                                col_a.metric("Score", f"{analysis['score']}/100")
+                                col_b.metric("Words", analysis['word_count'])
+                                col_c.metric("Hashtags", analysis['hashtag_count'])
+                                
+                                st.write(f"**Sentiment:** {analysis['sentiment']}")
+                                st.write(f"**Themes:** {', '.join(analysis['themes']) or 'None detected'}")
+                                st.write(f"**Has CTA:** {'Yes' if analysis['has_cta'] else 'No'}")
+                                
+                                # Color palette
+                                if analysis['colors']:
+                                    color_html = " ".join([
+                                        f'<span style="background-color:{c}; padding:8px; margin:2px; display:inline-block; color:white; font-size:10px;">{c}</span>'
+                                        for c in analysis['colors']
+                                    ])
+                                    st.markdown(f"**Colors:** {color_html}", unsafe_allow_html=True)
+                    
+                    st.divider()
                 
-                st.divider()
+                # Store analyses
+                if analyses:
+                    st.session_state.analysis_results = analyses
     
-    # Analysis summary
-    if st.session_state.post_analyses:
-        st.subheader("📈 Analysis Summary")
-        total_analyses = len(st.session_state.post_analyses)
-        avg_score = sum(analysis['overall_score'] for analysis in st.session_state.post_analyses) / total_analyses
+    # Section 4: Generate Prompts
+    if st.session_state.analysis_results and st.session_state.company_data:
+        st.header("4️⃣ Generate Content Prompts")
         
-        col1, col2 = st.columns(2)
-        col1.metric("Posts Analyzed", total_analyses)
-        col2.metric("Average Score", f"{avg_score:.1f}/100")
-        
-        st.info("✅ 6-parameter analysis completed. View detailed results in Tab 4, then proceed to Strategic Suggestions.")
+        if st.button("🎨 Generate Strategy & Prompts", type="primary"):
+            with st.spinner("Generating strategic recommendations..."):
+                prompts = generate_simple_prompts(
+                    st.session_state.analysis_results,
+                    st.session_state.company_data,
+                    groq_key
+                )
+                
+                st.session_state.prompts = prompts
+                
+                if not prompts.get('error'):
+                    # Strategy overview
+                    st.success("✅ Strategy Generated!")
+                    
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        st.metric("Strategy", prompts['strategy'].replace('_', ' ').title())
+                        st.metric("Competitor Avg Score", f"{prompts['competitor_avg_score']}/100")
+                    
+                    with col2:
+                        st.metric("Top Themes", ', '.join(prompts['top_competitor_themes']) or 'None')
+                        st.metric("CTA Usage", prompts['cta_usage'])
+                    
+                    st.info(f"**Approach:** {prompts['approach']}")
+                    
+                    # Product-specific prompts
+                    st.subheader("🎯 Product-Specific Prompts")
+                    
+                    for product_name, product_prompts in prompts['product_prompts'].items():
+                        with st.expander(f"📦 {product_name} Content Prompts", expanded=True):
+                            
+                            st.markdown("#### 🖼️ Image Prompt")
+                            st.code(product_prompts['image_prompt'])
+                            
+                            st.markdown("#### 🎬 Video Prompt")  
+                            st.code(product_prompts['video_prompt'])
+                            
+                            st.markdown("#### ✍️ Caption Template")
+                            st.code(product_prompts['caption_template'])
+                            
+                            st.markdown("#### #️⃣ Hashtags")
+                            st.code(" ".join(product_prompts['hashtags']))
+                            
+                            st.markdown(f"**Strategy Applied:** {product_prompts['strategy_used'].replace('_', ' ').title()}")
+                else:
+                    st.error(f"Error: {prompts['error']}")
+    
+    # Progress indicator
+    st.sidebar.header("📋 Progress")
+    progress_items = [
+        ("Company Data", bool(st.session_state.company_data)),
+        ("Scraped Captions", bool(st.session_state.scraped_data)),
+        ("Analysis Results", bool(st.session_state.analysis_results)),
+        ("Generated Prompts", bool(st.session_state.prompts))
+    ]
+    
+    for item, completed in progress_items:
+        st.sidebar.write(f"{'✅' if completed else '⏳'} {item}")
+    
+    # Footer
+    st.markdown("---")
+    st.info("🚀 **Simplified Version:** Streamlined for better performance while maintaining core functionality.")
 
-def analysis_results_tab():
-    """Tab 4: Display detailed analysis results"""
-    st.header("4️⃣ Detailed Analysis Results")
-    
-    if not st.session_state.post_analyses:
-        st.info("📊 Complete 6-parameter analysis first in Tab 3")
-        return
-    
-    # Results overview
-    st.subheader("📊 Analysis Overview")
-    
-    # Calculate parameter averages
-    param_scores = {
-        "Color & Visual": [],
-        "Tone of Voice": [],
-        "CTA Strength": [],
-        "Hashtag Strategy": [],
-        "Readability": [],
-        "Emotional Appeal": []
-    }
-    
-    for analysis in st.session_state.post_analyses:
-        param_scores["Color & Visual"].append(analysis["parameter_1_color_visual"]["score"])
-        param_scores["Tone of Voice"].append(analysis["parameter_2_tone_voice"]["score"])
-        param_scores["CTA Strength"].append(analysis["parameter_3_cta"]["score"])
-        param_scores["Hashtag Strategy"].append(analysis["parameter_4_hashtag_keywords"]["score"])
-        param_scores["Readability"].append(analysis["parameter_5_readability"]["score"])
-        param_scores["Emotional Appeal"].append(analysis["parameter_6_emotional_appeal"]["score"])
-    
-    # Display parameter averages
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        st.metric("Color & Visual", f"{sum(param_scores['Color & Visual'])/len(param_scores['Color & Visual']):.1f}/100")
-        st.metric("Tone of Voice", f"{sum(param_scores['Tone of Voice'])/len(param_scores['Tone of Voice']):.1f}/100")
-    
-    with col2:
-        st.metric("CTA Strength", f"{sum(param_scores['CTA Strength'])/len(param_scores['CTA Strength']):.1f}/100")
-        st.metric("Hashtag Strategy", f"{sum(param_scores['Hashtag Strategy'])/len(param_scores['Hashtag Strategy']):.1f}/100")
-    
-    with col3:
-        st.metric("Readability", f"{sum(param_scores['Readability'])/len(param_scores['Readability']):.1f}/100")
-        st.metric("Emotional Appeal", f"{sum(param_scores['Emotional Appeal'])/len(param_scores['Emotional Appeal']):.1f}/100")
-    
-    # Detailed results per post
-    st.subheader("📋 Post-by-Post Analysis")
-    
-    for idx, analysis in enumerate(st.session_state.post_analyses):
-        with st.expander(f"📊 {analysis['competitor_name']} - Post Analysis {idx + 1}", expanded=False):
-            
-            # Overall score
-            st.markdown(f"**Overall Score: {analysis['overall_score']}/100**")
-            st.markdown(f"**Post URL:** {analysis['post_url']}")
-            
-            # Parameter breakdown
-            col1, col2 = st.columns(2)
-            
-            with col1:
-                st.markdown("#### Parameter Scores")
-                st.markdown(f"• **Color & Visual:** {analysis['parameter_1_color_visual']['score']}/100")
-                st.markdown(f"• **Tone of Voice:** {analysis['parameter_2_tone_voice']['score']}/100")
-                st.markdown(f"• **CTA Strength:** {analysis['parameter_3_cta']['score']}/100")
-                st.markdown(f"• **Hashtag Strategy:** {analysis['parameter_4_hashtag_keywords']['score']}/100")
-                st.markdown(f"• **Readability:** {analysis['parameter_5_readability']['score']}/100")
-                st.markdown(f"• **Emotional Appeal:** {analysis['parameter_6_emotional_appeal']['score']}/100")
-            
-            with col2:
-                st.markdown("#### Key Insights")
+if __name__ == "__main__":
+    main()
