@@ -174,7 +174,7 @@ Found this project interesting? Contributions are welcome! Whether it's:
 
 ## 📄 License
 
-This project is open source and available under the [MIT License](LICENSE).
+This project is open source.
 
 ---
 
